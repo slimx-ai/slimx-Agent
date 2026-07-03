@@ -27,6 +27,9 @@ from slimx_agent.runtime import (
     AgentRuntime as AgentRuntime,
     RunProfile as RunProfile,
 )
+from slimx_agent.store import (
+    RunStore as RunStore,
+)
 from slimx_agent.tools import (
     AgentRunContext as AgentRunContext,
     StepExecutionError as StepExecutionError,
@@ -34,4 +37,4 @@ from slimx_agent.tools import (
     ToolRegistry as ToolRegistry,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
