@@ -105,9 +105,19 @@ def repair_plan_data(data: object) -> object:
     widens what a flaky local model can produce and still have accepted."""
     if not isinstance(data, dict):
         return data
+    # Schema echo: small models sometimes return the SCHEMA (e.g. assumptions =
+    # {"type": "array", "items": …}) instead of values. Salvage what can be salvaged —
+    # keep only string assumptions (else []) so a good steps list isn't rejected over
+    # garbage assumptions; an echoed/missing steps value becomes [] so validation gives
+    # the clean "at least one step" feedback the retry loop can act on.
+    assumptions = data.get("assumptions")
+    if not isinstance(assumptions, list):
+        data = {**data, "assumptions": []}
+    else:
+        data = {**data, "assumptions": [a for a in assumptions if isinstance(a, str)]}
     steps = data.get("steps")
     if not isinstance(steps, list):
-        return data
+        return {**data, "steps": []}
     repaired: list[dict[str, Any]] = []
     for raw in steps:
         if not isinstance(raw, dict) or raw.get("type") not in ALLOWED_STEP_TYPES:
@@ -160,7 +170,8 @@ def build_planner_prompt(
     allowed = ", ".join(advertised)
     prompt = (
         "You plan a short, supervised AI workflow. Output JSON ONLY, matching the schema, with "
-        "2 to 5 steps. EVERY step MUST include all of: title, type, instruction, "
+        "2 to 5 steps. Return concrete VALUES — never the schema/type definitions themselves. "
+        "EVERY step MUST include all of: title, type, instruction, "
         "expected_output, requires_approval.\n"
         f"`type` MUST be exactly one of: {allowed}. Prefer self-contained steps:\n"
         "- model_call: ask a model to analyze or write something (use for most steps).\n"
