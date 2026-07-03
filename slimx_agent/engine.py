@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from slimx_agent import contracts
-from slimx_agent.policies import classify_step, permission_block_reason, requires_stop
+from slimx_agent import policies
 from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
 
 # Run statuses a run cannot transition out of.
@@ -92,7 +92,7 @@ def execute_run_events(
         # is skipped honestly rather than stopping the run for an approval it could never
         # satisfy. The grant list is set at create time; the fresh run is authoritative.
         if step.status in ("pending", "awaiting_approval"):
-            permit_reason = permission_block_reason(step, current or run)
+            permit_reason = policies.permission_block_reason(step, current or run)
             if permit_reason is not None:
                 _skip_step(store, run, step.id, step.type, permit_reason)
                 yield from drain()
@@ -192,8 +192,8 @@ def resolve_gate(
     policy matrix in :mod:`slimx_agent.policies` decide."""
     if policy is None:
         return None, "", bool(step.requires_approval) and not auto_approve
-    classification, reason = classify_step(step)
-    stop = requires_stop(policy, classification, step.requires_approval)
+    classification, reason = policies.classify_step(step)
+    stop = policies.requires_stop(policy, classification, step.requires_approval)
     return classification, reason, stop
 
 
