@@ -1,7 +1,7 @@
 """Planner schemas + validation (the portable planning layer).
 
-Extracted from ControlRoom's ``services/agent/schemas.py`` (Stage H); the host keeps a
-compatible copy until it consumes this package as a dependency.
+Kept in sync with ControlRoom's ``services/agent/schemas.py`` (minus the host-specific
+system-map inference) until the host consumes this module directly.
 
 Two shapes, on purpose:
 
@@ -135,6 +135,7 @@ def build_planner_prompt(
     feedback: str | None = None,
     review_context: str | None = None,
     allowed_tools: list[str] | None = None,
+    prior_results: bool = False,
 ) -> str:
     # Only the always-available assisted step types are advertised by default. web_search is an
     # external tool; it is offered to the planner ONLY when the run granted it (else the executor would
@@ -208,6 +209,14 @@ def build_planner_prompt(
             "create_synthesis to synthesize the review, and use rag_retrieve / attach_context / "
             "save_evidence where they fit — instead of a single generic model_call.\n"
         )
+    if prior_results:
+        # Follow-up turns (v3 autonomy): earlier agent runs in this conversation already produced
+        # results, persisted as context this run's steps will see. Build on them, don't redo them.
+        prompt += (
+            "\nEarlier agent results from this conversation are attached as context. Plan steps "
+            "that BUILD ON them — verify, extend, or synthesize further — instead of redoing "
+            "completed work.\n"
+        )
     prompt += f"\nGoal: {goal}"
     if feedback:
         # Retry guidance: tell the model exactly why the last attempt was rejected so it can correct
@@ -217,3 +226,26 @@ def build_planner_prompt(
             f"{feedback}\nReturn corrected JSON ONLY, matching the schema."
         )
     return prompt
+
+
+# --- Completion self-check (v3 autonomy) ----------------------------------------------------
+# Defaulted dataclass for the structured verdict a completed run is checked against its goal
+# with (AGENT_AUTO_ITERATE). Defaults make weak local models construct; ``satisfied=True`` is
+# the fail-safe — a malformed verdict never triggers an iteration.
+
+
+@dataclass
+class SlimXOutcomeVerdict:
+    satisfied: bool = True
+    gaps: list[str] = field(default_factory=list)
+
+
+def build_self_check_prompt(goal: str, result_text: str) -> str:
+    return (
+        "You verify whether an AI agent's result satisfies the user's goal. Output JSON ONLY, "
+        "matching the schema: satisfied (boolean), gaps (list of strings). Set satisfied=true "
+        "unless something MATERIAL the goal asked for is missing. List at most 3 concrete, "
+        "actionable gaps (an unanswered part of the goal, missing analysis, unsupported claims). "
+        "Never invent scope beyond the goal.\n\n"
+        f"Goal: {goal}\n\nResult:\n{result_text}"
+    )
