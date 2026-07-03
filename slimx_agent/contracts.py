@@ -1,0 +1,139 @@
+"""SlimX-Agent contracts: the stable constants shared by every agent surface.
+
+The single source of truth for step types, run modes, approval policies, tool grants, and the
+durable event vocabulary. Historically these lived in ``app.models.agent_run`` and
+``app.services.agent.events``; those modules now re-export from here so every existing import
+path keeps working (Stage B of ``docs/slimx-agent-extraction-plan.md``).
+
+**Dependency rule:** this module imports nothing beyond the standard library — no ORM, no
+FastAPI, no other ``app.*`` modules — so it can move verbatim into the standalone
+``slimx-agent`` package. A guard test enforces this.
+"""
+
+from __future__ import annotations
+
+# --------------------------------------------------------------------------- step types
+# Step-type allowlist. The executor dispatches ONLY these types; the planner rejects anything
+# else at validation time (structural safety, not prompt safety). The first six are the
+# always-on assisted-workflow set. The build types are additive but GATED: only usable when the
+# run is mode="build_agent" AND ENABLE_AGENT_BUILD_MODE is on, and they only ever touch the
+# per-run sandbox workspace — never arbitrary host paths, shells, or generic tool calls.
+ASSISTED_STEP_TYPES: tuple[str, ...] = (
+    "model_call",
+    "compare_models",
+    "rag_retrieve",
+    "knowledge_retrieve",
+    "attach_context",
+    "create_synthesis",
+    "save_evidence",
+)
+# External tools reach the network via the one bounded MCP boundary (services/mcp_runtime).
+# They are GATED twice over: usable only when the run's ``allowed_tools_json`` grants them
+# (else the executor skips the step), and classified ``hard_gated`` for approval so each
+# external call still stops for the user even in Auto-complete. ``web_search`` was the first;
+# ``mcp_call`` is the generic (write-capable) connector invocation — TRIPLE-gated: run grant
+# (``mcp_tools``) + per-call hard-gate approval + the connector's own ``allowedTools``
+# allowlist (connectors permit nothing by default). Not advertised to the planner (structured
+# params required); it enters plans via templates or the API.
+EXTERNAL_STEP_TYPES: tuple[str, ...] = ("web_search", "mcp_call")
+# Read-only codebase tools, confined to ``AGENT_CODE_SCAN_ROOT`` (never executes code, never
+# edits; code EDIT/RUN are deliberately NOT provided — they would be arbitrary code execution,
+# which the product forbids). Gated by the ``code_read`` grant; self-skip without a scan root.
+CODE_STEP_TYPES: tuple[str, ...] = ("code_search", "code_read")
+BUILD_STEP_TYPES: tuple[str, ...] = (
+    "write_file",
+    "package_artifact",
+)
+# Master-agent orchestration: ``spawn_run`` creates AND plans a child run (a "sub-agent") for
+# one focused sub-goal; ``join_runs`` executes the spawned children and collects their outcomes
+# as context for later steps. Gated by the ``spawn_agents`` grant and bounded by depth/width
+# caps; children never inherit the grant, so a run cannot fan out recursively.
+ORCHESTRATION_STEP_TYPES: tuple[str, ...] = ("spawn_run", "join_runs")
+ALLOWED_STEP_TYPES: tuple[str, ...] = (
+    ASSISTED_STEP_TYPES
+    + EXTERNAL_STEP_TYPES
+    + CODE_STEP_TYPES
+    + BUILD_STEP_TYPES
+    + ORCHESTRATION_STEP_TYPES
+)
+
+# --------------------------------------------------------------------------- grants & modes
+# Grant keys a run may list in ``allowed_tools_json`` to opt into an optional/external tool.
+# Kept separate from step types so one grant can gate one-or-more step types (and so the UI
+# has a stable vocabulary). Core assisted steps are always available and are NOT gated by a
+# grant. Workspace knowledge / rag is always-on and intentionally not listed here.
+GRANTABLE_TOOLS: tuple[str, ...] = ("web_search", "code_read", "spawn_agents", "mcp_tools")
+
+# What kind of agent run this is — drives the planner prompt, allowed step types, and the UI.
+AGENT_MODES: tuple[str, ...] = ("assisted_workflow", "build_agent", "research_agent")
+
+# Deterministic, backend-enforced approval policy (supersedes the planner-set per-step
+# ``requires_approval`` flag). ``manual`` gates every planner-flagged/reviewable step;
+# ``review_checkpoints`` runs auto-safe steps and stops only at meaningful review points;
+# ``auto_complete`` runs to completion and stops ONLY at true safety checkpoints (hard gates).
+# ``None`` on a run means "legacy behavior": honor the old ``auto_approve`` boolean + planner
+# gate, so pre-existing runs are byte-for-byte unchanged.
+APPROVAL_POLICIES: tuple[str, ...] = ("manual", "review_checkpoints", "auto_complete")
+
+# --------------------------------------------------------------------------- event types
+# Canonical durable event types, kept in one place so routes, executor, UI reducers, and tests
+# agree. Convention: payloads carry only small references (ids, paths, counts) — never model
+# output, retrieved chunks, traces, or evidence text. Events are append-only with a unique
+# per-run ``sequence`` so a run can be replayed from scratch and a live stream resumed from a
+# known cursor.
+RUN_CREATED = "agent.run.created"
+PLAN_CREATED = "agent.plan.created"
+PLAN_APPROVED = "agent.plan.approved"
+STEP_CREATED = "agent.step.created"
+STEP_STARTED = "agent.step.started"
+STEP_COMPLETED = "agent.step.completed"
+STEP_FAILED = "agent.step.failed"
+STEP_SKIPPED = "agent.step.skipped"
+APPROVAL_REQUIRED = "agent.approval.required"
+APPROVAL_GRANTED = "agent.approval.granted"
+ARTIFACT_CREATED = "agent.artifact.created"
+EVIDENCE_LINKED = "agent.evidence.linked"
+RUN_COMPLETED = "agent.run.completed"
+RUN_FAILED = "agent.run.failed"
+RUN_PAUSED = "agent.run.paused"
+RUN_CANCELLED = "agent.run.cancelled"
+RUN_RESUMED = "agent.run.resumed"
+# System-map inference (additive): a model-declared element of the system the goal implies
+# (component/file/api/entity/test/risk/decision …). The payload carries kind/label/layer/
+# rationale and is always source="agent_declared" — an inference from the model's narration,
+# never tool- or test-confirmed. One event per element; a summary MAP_EXTRACTED follows.
+SYSTEM_ELEMENT = "agent.system.element"
+MAP_EXTRACTED = "agent.map.extracted"
+# Build Agent (additive): a file was written into the per-run sandbox workspace.
+# Reference-only (path + size); the bytes live in the sandbox, never in the event.
+FILE_WRITTEN = "agent.file.written"
+# Master agent (additive): a sub-agent run was created+planned by a spawn_run step / the
+# spawned children were executed by a join_runs step. Payloads carry child run ids and
+# statuses only — the children's own event trails hold their detail.
+RUN_SPAWNED = "agent.run.spawned"
+RUN_JOINED = "agent.run.joined"
+
+EVENT_TYPES: tuple[str, ...] = (
+    RUN_CREATED,
+    PLAN_CREATED,
+    PLAN_APPROVED,
+    STEP_CREATED,
+    STEP_STARTED,
+    STEP_COMPLETED,
+    STEP_FAILED,
+    STEP_SKIPPED,
+    APPROVAL_REQUIRED,
+    APPROVAL_GRANTED,
+    ARTIFACT_CREATED,
+    EVIDENCE_LINKED,
+    RUN_COMPLETED,
+    RUN_FAILED,
+    RUN_PAUSED,
+    RUN_CANCELLED,
+    RUN_RESUMED,
+    SYSTEM_ELEMENT,
+    MAP_EXTRACTED,
+    FILE_WRITTEN,
+    RUN_SPAWNED,
+    RUN_JOINED,
+)
