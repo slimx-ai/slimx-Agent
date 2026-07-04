@@ -48,6 +48,13 @@ CODE_STEP_TYPES: tuple[str, ...] = ("code_search", "code_read")
 # reads one project document's extracted text (bounded). All three self-skip honestly when the
 # run has no project scope or the project has no matching material.
 EVIDENCE_STEP_TYPES: tuple[str, ...] = ("project_inventory", "evidence_query", "document_read")
+# Project-evidence WRITES: additive, reversible, in-scope-to-the-user's-own-project mutations —
+# ``create_note`` saves a comment (Note) anchored in the active project; ``add_tag`` attaches a
+# label to an existing project highlight/comment. GATED by the ``evidence_write`` grant (off by
+# default, like every write path) so the agent never mutates a user's evidence unless they opt in,
+# and classified ``review_recommended`` so they still stop for review under manual/review policies.
+# Never destructive: no deletes, no cross-project writes, no external egress.
+EVIDENCE_WRITE_STEP_TYPES: tuple[str, ...] = ("create_note", "add_tag")
 BUILD_STEP_TYPES: tuple[str, ...] = (
     "write_file",
     "package_artifact",
@@ -60,6 +67,7 @@ ORCHESTRATION_STEP_TYPES: tuple[str, ...] = ("spawn_run", "join_runs")
 ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
     + EVIDENCE_STEP_TYPES
+    + EVIDENCE_WRITE_STEP_TYPES
     + EXTERNAL_STEP_TYPES
     + CODE_STEP_TYPES
     + BUILD_STEP_TYPES
@@ -71,7 +79,13 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
 # Kept separate from step types so one grant can gate one-or-more step types (and so the UI
 # has a stable vocabulary). Core assisted steps are always available and are NOT gated by a
 # grant. Workspace knowledge / rag is always-on and intentionally not listed here.
-GRANTABLE_TOOLS: tuple[str, ...] = ("web_search", "code_read", "spawn_agents", "mcp_tools")
+GRANTABLE_TOOLS: tuple[str, ...] = (
+    "web_search",
+    "code_read",
+    "spawn_agents",
+    "mcp_tools",
+    "evidence_write",
+)
 
 # What kind of agent run this is — drives the planner prompt, allowed step types, and the UI.
 AGENT_MODES: tuple[str, ...] = ("assisted_workflow", "build_agent", "research_agent")

@@ -40,4 +40,4 @@ from slimx_agent.tools import (
     ToolRegistry as ToolRegistry,
 )
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"

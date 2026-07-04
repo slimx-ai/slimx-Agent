@@ -53,6 +53,11 @@ _TIER_BY_TYPE: dict[str, str] = {
     "project_inventory": AUTO_SAFE,
     "evidence_query": AUTO_SAFE,
     "document_read": AUTO_SAFE,
+    # Project-evidence writes: additive/reversible in-project mutations behind the evidence_write
+    # grant — a meaningful review point (they change what the user sees on their evidence board),
+    # but never a hard gate (local, reversible, no egress).
+    "create_note": REVIEW_RECOMMENDED,
+    "add_tag": REVIEW_RECOMMENDED,
     # Build-agent steps touch a sandboxed per-run workspace; they self-skip outside build mode.
     "write_file": REVIEW_RECOMMENDED,
     "package_artifact": REVIEW_RECOMMENDED,
@@ -130,6 +135,8 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "project_inventory": READ,
     "evidence_query": READ,
     "document_read": READ,
+    "create_note": PERSISTENT,
+    "add_tag": WRITE,
     "write_file": WRITE,
     "package_artifact": WRITE,
     # Master agent: spawn creates+plans child runs; join executes them (their own steps stay
@@ -148,6 +155,8 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "code_read": "code_read",
     "spawn_run": "spawn_agents",
     "join_runs": "spawn_agents",
+    "create_note": "evidence_write",
+    "add_tag": "evidence_write",
 }
 
 # User-facing label per grant key, for honest UI/skip copy.
@@ -156,6 +165,7 @@ GRANT_LABELS: dict[str, str] = {
     "code_read": "Codebase (read-only)",
     "spawn_agents": "Sub-agents",
     "mcp_tools": "Connector tools (MCP)",
+    "evidence_write": "Save notes & tags",
 }
 
 

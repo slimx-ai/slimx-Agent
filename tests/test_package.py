@@ -30,7 +30,13 @@ def test_contracts_vocabulary_is_coherent():
     assert "model_call" in ALLOWED_STEP_TYPES
     assert "spawn_run" in ALLOWED_STEP_TYPES and "join_runs" in ALLOWED_STEP_TYPES
     assert "mcp_call" in ALLOWED_STEP_TYPES
-    assert set(GRANTABLE_TOOLS) == {"web_search", "code_read", "spawn_agents", "mcp_tools"}
+    assert set(GRANTABLE_TOOLS) == {
+        "web_search",
+        "code_read",
+        "spawn_agents",
+        "mcp_tools",
+        "evidence_write",
+    }
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 22
 
 
@@ -48,6 +54,26 @@ def test_evidence_step_types_are_ungated_auto_safe_reads():
         assert tier == policies.AUTO_SAFE
         assert policies.CAPABILITY_BY_TYPE[step_type] == policies.READ
         assert policies.required_grant(step_type) is None
+
+
+def test_evidence_write_step_types_are_grant_gated_review_recommended():
+    """Project-evidence writes: allowed, review-recommended (not hard-gated), and gated behind the
+    ``evidence_write`` grant so the agent never mutates evidence unless the user opted in."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import EVIDENCE_WRITE_STEP_TYPES
+
+    assert EVIDENCE_WRITE_STEP_TYPES == ("create_note", "add_tag")
+    for step_type in EVIDENCE_WRITE_STEP_TYPES:
+        assert step_type in ALLOWED_STEP_TYPES
+        step = type("Step", (), {"type": step_type, "requires_approval": False})()
+        tier, _reason = policies.classify_step(step)
+        assert tier == policies.REVIEW_RECOMMENDED
+        assert policies.required_grant(step_type) == "evidence_write"
+        # Ungranted run → blocked with an honest reason; granted run → permitted.
+        ungranted = type("Run", (), {"allowed_tools_json": []})()
+        granted = type("Run", (), {"allowed_tools_json": ["evidence_write"]})()
+        assert policies.permission_block_reason(step, ungranted) is not None
+        assert policies.permission_block_reason(step, granted) is None
 
 
 def test_contracts_and_tools_and_runtime_are_stdlib_only():
@@ -117,10 +143,14 @@ def test_planner_prompt_gates_tools_by_grant():
     assert "mcp_call" not in granted
     # Evidence tools are always-on (grant-free), so they are always advertised …
     assert "evidence_query" in bare and "project_inventory" in bare and "document_read" in bare
-    # … and the host's project grounding is injected only when provided.
+    # … the host's project grounding is injected only when provided …
     assert "EXACTLY as listed" not in bare
     hinted = build_planner_prompt("Do the thing", evidence_hint="tags: Risk (3 highlights).")
     assert "tags: Risk (3 highlights)." in hinted
+    # … and evidence WRITES are gated behind the evidence_write grant.
+    assert "create_note" not in bare and "add_tag" not in bare
+    writable = build_planner_prompt("Do the thing", allowed_tools=["evidence_write"])
+    assert "create_note" in writable and "add_tag" in writable
 
 
 def test_runtime_protocol_shape():
@@ -133,7 +163,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.3.1"
+    assert slimx_agent.__version__ == "0.3.2"
 
 
 def test_run_id_types_are_uuid_friendly():

@@ -180,6 +180,7 @@ def build_planner_prompt(
     web_search_granted = "web_search" in grants
     code_read_granted = "code_read" in grants
     spawn_granted = "spawn_agents" in grants
+    evidence_write_granted = "evidence_write" in grants
     _gated_out = set()
     if not web_search_granted:
         _gated_out.add("web_search")
@@ -187,6 +188,8 @@ def build_planner_prompt(
         _gated_out |= {"code_search", "code_read"}
     if not spawn_granted:
         _gated_out |= {"spawn_run", "join_runs"}
+    if not evidence_write_granted:
+        _gated_out |= {"create_note", "add_tag"}
     # mcp_call is never advertised to the planner: it needs structured params (connector_id/
     # tool/arguments) the plan schema cannot carry reliably — it enters plans via templates or
     # the API, and the executor honestly skips a bare planner-emitted one.
@@ -234,6 +237,13 @@ def build_planner_prompt(
             "You may inspect the codebase (read-only): code_search finds where something is, code_read "
             "reads one file by its repo-relative path. Use them to ground code analysis in real source, "
             "then feed findings into a model_call/create_synthesis. You CANNOT edit or run code. "
+        )
+    if evidence_write_granted:
+        prompt += (
+            "You may save findings back into the project (additive, reversible): create_note writes a "
+            "comment (put the comment in the instruction; optionally name a document to anchor it), and "
+            "add_tag attaches a label to an existing highlight/comment. Use them to capture action items "
+            "or organize evidence — never to delete anything. "
         )
     if spawn_granted:
         prompt += (
