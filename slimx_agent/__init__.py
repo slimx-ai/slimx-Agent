@@ -5,8 +5,11 @@ Extracted from SlimX-AI ControlRoom (extraction plan Stage H). This package owns
 modes, approval policies, the durable event vocabulary, the ``ToolRegistry`` dispatch
 boundary, the ``AgentRuntime`` protocol, and the pure planning schemas/prompt/validation.
 
-It deliberately does NOT own the execution engine, persistence, model transport, or any
-host capability (evidence, synthesis, RAG, MCP) — hosts register those as tool handlers
+It also owns the **execution engine** (the dispatch loop over the ``RunStore`` protocol,
+Stage I) and the **standalone service** (``slimx_agent.service``, the loop in its own
+container driving a host's internal agent-host callback API — install the ``service``
+extra). It deliberately does NOT own persistence, model transport, or any host capability
+(evidence, synthesis, RAG, MCP) — hosts keep those behind tool handlers / the callback API
 and implement ``AgentRuntime``. No agent framework (LangChain/LangGraph/CrewAI/AutoGen/
 OpenAI-Agents-SDK) is, or may ever become, a dependency of this package.
 
@@ -37,4 +40,4 @@ from slimx_agent.tools import (
     ToolRegistry as ToolRegistry,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -122,9 +122,7 @@ def test_happy_path_completes_and_streams_every_event():
 
 
 def test_ungranted_tool_skips_before_the_approval_gate():
-    store = MemoryStore(
-        FakeRun("r"), [FakeStep("s1", "web_search"), FakeStep("s2", "model_call")]
-    )
+    store = MemoryStore(FakeRun("r"), [FakeStep("s1", "web_search"), FakeStep("s2", "model_call")])
     run = engine.execute_run(store, _registry(), store.run, profile=object())
     assert run.status == "completed"
     assert store.steps[0].status == "skipped"

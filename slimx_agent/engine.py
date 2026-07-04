@@ -152,9 +152,7 @@ def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile
     """Execute one step. Always returns the step (status ``completed``/``failed``/``skipped``)."""
     step_id = step.id
     store.set_step_state(step_id, "running")
-    store.append_event(
-        run.id, contracts.STEP_STARTED, step_id=step_id, payload={"type": step.type}
-    )
+    store.append_event(run.id, contracts.STEP_STARTED, step_id=step_id, payload={"type": step.type})
 
     handler = registry.resolve(step.type)
     if handler is None:
@@ -170,9 +168,7 @@ def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile
         store.rollback()
         return _fail_step(store, run, step_id, step.type, _short_error(exc))
 
-    fresh = store.set_step_state(
-        step_id, "completed", error=None, output_refs=output_refs or None
-    )
+    fresh = store.set_step_state(step_id, "completed", error=None, output_refs=output_refs or None)
     store.append_event(
         run.id,
         contracts.STEP_COMPLETED,
