@@ -170,6 +170,7 @@ def build_planner_prompt(
     review_context: str | None = None,
     allowed_tools: list[str] | None = None,
     prior_results: bool = False,
+    evidence_hint: str | None = None,
 ) -> str:
     # Only the always-available assisted step types are advertised by default. web_search is an
     # external tool; it is offered to the planner ONLY when the run granted it (else the executor would
@@ -205,6 +206,14 @@ def build_planner_prompt(
         "- knowledge_retrieve: pull promoted decisions/syntheses from the project Knowledge Base "
         "so the run respects what the team already concluded.\n"
         "- attach_context: save earlier text as reusable context.\n"
+        "- project_inventory: map the active project (documents, tags, evidence counts) when the "
+        "goal needs project awareness first.\n"
+        "- evidence_query: retrieve the user's saved evidence — highlights and comments, filtered "
+        "by tag name, kind, or keyword — as a cited pack later steps reason over. Name the exact "
+        "tag(s) or keyword(s) in the instruction; use it whenever the goal mentions tags, "
+        "highlights, comments, or the user's own notes/evidence.\n"
+        "- document_read: read one project document's extracted text by naming its title in the "
+        "instruction (works without indexing).\n"
         "Use rag_retrieve ONLY if the goal needs indexed documents, and save_evidence ONLY if a "
         "specific quote and its source are already known. "
     )
@@ -234,6 +243,16 @@ def build_planner_prompt(
             "as context — then finish with a model_call or create_synthesis that merges those results. "
         )
     prompt += "Set requires_approval=true for any step the user should review before it runs.\n"
+    if evidence_hint:
+        # Deterministic project grounding: the host lists the ACTIVE project's real tags (with
+        # evidence counts) and document titles so the planner names them exactly instead of
+        # inventing labels — the difference between a usable evidence_query and a no-match skip.
+        prompt += (
+            "\nThe active project's own material (available to project_inventory / evidence_query "
+            f"/ document_read): {evidence_hint} When the goal is about this material, plan those "
+            "project-scoped steps — naming tags and document titles EXACTLY as listed — before any "
+            "generic model_call, and finish by reasoning over what they retrieved.\n"
+        )
     if review_context:
         # A durable review packet (highlights/comments/Ask branches/tags) is already attached as
         # conversation context, so the model sees it during execution. Steer the plan to USE it rather

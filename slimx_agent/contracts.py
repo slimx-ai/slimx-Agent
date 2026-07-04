@@ -40,6 +40,14 @@ EXTERNAL_STEP_TYPES: tuple[str, ...] = ("web_search", "mcp_call")
 # edits; code EDIT/RUN are deliberately NOT provided — they would be arbitrary code execution,
 # which the product forbids). Gated by the ``code_read`` grant; self-skip without a scan root.
 CODE_STEP_TYPES: tuple[str, ...] = ("code_search", "code_read")
+# Project-evidence tools: always-on, read-only views over the ACTIVE PROJECT's own material
+# (documents, tags, highlights, comments). Local queries only — no egress, and no write beyond
+# the visible context source each saves — so they need no grant, like rag_retrieve.
+# ``project_inventory`` maps the project (documents/tags/evidence counts); ``evidence_query``
+# retrieves highlights/comments by tag/kind/keyword as a cited evidence pack; ``document_read``
+# reads one project document's extracted text (bounded). All three self-skip honestly when the
+# run has no project scope or the project has no matching material.
+EVIDENCE_STEP_TYPES: tuple[str, ...] = ("project_inventory", "evidence_query", "document_read")
 BUILD_STEP_TYPES: tuple[str, ...] = (
     "write_file",
     "package_artifact",
@@ -51,6 +59,7 @@ BUILD_STEP_TYPES: tuple[str, ...] = (
 ORCHESTRATION_STEP_TYPES: tuple[str, ...] = ("spawn_run", "join_runs")
 ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
+    + EVIDENCE_STEP_TYPES
     + EXTERNAL_STEP_TYPES
     + CODE_STEP_TYPES
     + BUILD_STEP_TYPES

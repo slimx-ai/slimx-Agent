@@ -48,6 +48,11 @@ _TIER_BY_TYPE: dict[str, str] = {
     # They only run when the run granted the ``code_read`` tool, so auto-running when present is safe.
     "code_search": AUTO_SAFE,
     "code_read": AUTO_SAFE,
+    # Project-evidence reads: local, bounded queries over the active project's own documents/
+    # tags/highlights/comments — additive like rag_retrieve/knowledge_retrieve.
+    "project_inventory": AUTO_SAFE,
+    "evidence_query": AUTO_SAFE,
+    "document_read": AUTO_SAFE,
     # Build-agent steps touch a sandboxed per-run workspace; they self-skip outside build mode.
     "write_file": REVIEW_RECOMMENDED,
     "package_artifact": REVIEW_RECOMMENDED,
@@ -122,6 +127,9 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "mcp_call": EXTERNAL,
     "code_search": READ,
     "code_read": READ,
+    "project_inventory": READ,
+    "evidence_query": READ,
+    "document_read": READ,
     "write_file": WRITE,
     "package_artifact": WRITE,
     # Master agent: spawn creates+plans child runs; join executes them (their own steps stay

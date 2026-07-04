@@ -34,6 +34,22 @@ def test_contracts_vocabulary_is_coherent():
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 22
 
 
+def test_evidence_step_types_are_ungated_auto_safe_reads():
+    """The project-evidence tools are always-on local reads: allowed, auto-safe, READ-class,
+    and grant-free — the rag_retrieve/knowledge_retrieve risk profile, never web_search's."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import EVIDENCE_STEP_TYPES
+
+    assert EVIDENCE_STEP_TYPES == ("project_inventory", "evidence_query", "document_read")
+    for step_type in EVIDENCE_STEP_TYPES:
+        assert step_type in ALLOWED_STEP_TYPES
+        step = type("Step", (), {"type": step_type, "requires_approval": False})()
+        tier, _reason = policies.classify_step(step)
+        assert tier == policies.AUTO_SAFE
+        assert policies.CAPABILITY_BY_TYPE[step_type] == policies.READ
+        assert policies.required_grant(step_type) is None
+
+
 def test_contracts_and_tools_and_runtime_are_stdlib_only():
     """The move-verbatim guarantee: no third-party imports in the core three modules."""
     for module_name in ("contracts", "tools", "runtime"):
@@ -99,6 +115,12 @@ def test_planner_prompt_gates_tools_by_grant():
     assert "spawn_run" in granted
     # mcp_call is NEVER advertised (structured params required).
     assert "mcp_call" not in granted
+    # Evidence tools are always-on (grant-free), so they are always advertised …
+    assert "evidence_query" in bare and "project_inventory" in bare and "document_read" in bare
+    # … and the host's project grounding is injected only when provided.
+    assert "EXACTLY as listed" not in bare
+    hinted = build_planner_prompt("Do the thing", evidence_hint="tags: Risk (3 highlights).")
+    assert "tags: Risk (3 highlights)." in hinted
 
 
 def test_runtime_protocol_shape():
@@ -111,7 +133,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.3.0"
+    assert slimx_agent.__version__ == "0.3.1"
 
 
 def test_run_id_types_are_uuid_friendly():
