@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
 
 from slimx_agent.contracts import ALLOWED_STEP_TYPES
 
@@ -72,6 +72,18 @@ class AgentPlanStep(BaseModel):
             raise ValueError(f"Unsupported step type {value!r}; allowed: {allowed}")
         return value
 
+    @model_validator(mode="after")
+    def _model_steps_need_an_instruction(self) -> "AgentPlanStep":
+        # model_call / compare_models execute the instruction AS the prompt — an empty one is
+        # guaranteed to fail at run time ("model_call requires an instruction"), so reject it
+        # at plan time where the retry-with-feedback loop can get the model to fill it in.
+        if self.type in ("model_call", "compare_models") and not self.instruction.strip():
+            raise ValueError(
+                f"{self.type} steps must include a non-empty 'instruction' — the exact "
+                "prompt/task text the model should run"
+            )
+        return self
+
 
 class AgentPlan(BaseModel):
     assumptions: list[str] = []
@@ -122,7 +134,19 @@ def repair_plan_data(data: object) -> object:
     for raw in steps:
         if not isinstance(raw, dict) or raw.get("type") not in ALLOWED_STEP_TYPES:
             continue
-        title = str(raw.get("title") or "").strip()
+        # Models (large ones included) often put the step text under an alias key instead of
+        # `instruction` (and the step name under `name`). Adopt the first non-empty alias so a
+        # semantically-complete plan isn't rejected — or worse, accepted with empty prompts
+        # that only fail later at execution ("model_call requires an instruction").
+        if not str(raw.get("instruction") or "").strip():
+            for alias in ("description", "prompt", "task", "details"):
+                alias_value = str(raw.get(alias) or "").strip()
+                if alias_value:
+                    raw = {**raw, "instruction": alias_value}
+                    break
+        title = str(raw.get("title") or raw.get("name") or "").strip()
+        if title and not raw.get("title"):
+            raw = {**raw, "title": title}
         if not title:
             instruction = str(raw.get("instruction") or "").strip()
             raw = {**raw, "title": instruction[:60] or f"Step {len(repaired) + 1}"}
@@ -172,7 +196,8 @@ def build_planner_prompt(
         "You plan a short, supervised AI workflow. Output JSON ONLY, matching the schema, with "
         "2 to 5 steps. Return concrete VALUES — never the schema/type definitions themselves. "
         "EVERY step MUST include all of: title, type, instruction, "
-        "expected_output, requires_approval.\n"
+        "expected_output, requires_approval. `instruction` is the exact prompt/task text "
+        "for that step and must never be empty.\n"
         f"`type` MUST be exactly one of: {allowed}. Prefer self-contained steps:\n"
         "- model_call: ask a model to analyze or write something (use for most steps).\n"
         "- compare_models: ask the same question across the workspace's models to compare answers.\n"
