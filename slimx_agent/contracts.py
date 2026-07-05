@@ -72,6 +72,14 @@ ORCHESTRATION_STEP_TYPES: tuple[str, ...] = ("spawn_run", "join_runs")
 # read-only investigation runs to completion under Auto-complete after one plan approval, rather
 # than stopping on every device read. It never mutates a device; the bridge enforces read-only.
 NETOPS_STEP_TYPES: tuple[str, ...] = ("netops_collect",)
+# NetOps WRITE path (Stage 4/5) — device-changing, so OFF by default at every layer: gated by the
+# ``netops_write`` grant, the bridge's own ``NETOPS_ENABLE_WRITE`` + writelist, and the connector's
+# allowedTools. Never advertised to the planner (a change enters via a template/API with structured
+# params). ``netops_apply`` is HARD-GATED (every change stops for explicit human approval — Mode 4);
+# ``netops_auto_apply`` is ``review_recommended`` for bounded auto-remediation (Mode 5), which the
+# host additionally fences behind a flag + a low-risk change-type allowlist. Every change is
+# dry-run-planned, rollback-carrying, validated after, and recorded — never a blind mutation.
+NETOPS_WRITE_STEP_TYPES: tuple[str, ...] = ("netops_apply", "netops_auto_apply")
 ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
     + EVIDENCE_STEP_TYPES
@@ -81,6 +89,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + BUILD_STEP_TYPES
     + ORCHESTRATION_STEP_TYPES
     + NETOPS_STEP_TYPES
+    + NETOPS_WRITE_STEP_TYPES
 )
 
 # --------------------------------------------------------------------------- grants & modes
@@ -95,6 +104,7 @@ GRANTABLE_TOOLS: tuple[str, ...] = (
     "mcp_tools",
     "evidence_write",
     "netops_read",
+    "netops_write",
 )
 
 # What kind of agent run this is — drives the planner prompt, allowed step types, and the UI.

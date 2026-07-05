@@ -197,6 +197,9 @@ def build_planner_prompt(
     # tool/arguments) the plan schema cannot carry reliably — it enters plans via templates or
     # the API, and the executor honestly skips a bare planner-emitted one.
     _gated_out.add("mcp_call")
+    # NetOps write steps are never advertised either: a device change must not be invented by the
+    # planner. They enter via a template/API with structured params, hard-gated for approval.
+    _gated_out |= {"netops_apply", "netops_auto_apply"}
     advertised = [t for t in ALLOWED_STEP_TYPES if t not in _gated_out]
     allowed = ", ".join(advertised)
     prompt = (

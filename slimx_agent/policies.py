@@ -70,6 +70,13 @@ _TIER_BY_TYPE: dict[str, str] = {
     # netops_read grant — but review_recommended, NOT hard_gated: a read-only investigation should
     # run to completion under Auto-complete after one plan approval, not stop on every device read.
     "netops_collect": REVIEW_RECOMMENDED,
+    # netops_apply CHANGES a device — hard_gated so every change stops for explicit human approval
+    # even in Auto-complete (Mode 4), on top of the netops_write grant + the bridge's own gates.
+    "netops_apply": HARD_GATED,
+    # netops_auto_apply is bounded auto-remediation (Mode 5): review_recommended so it can run under
+    # Auto-complete, but the host fences it behind a flag + a low-risk change-type allowlist and
+    # auto-rolls-back on failed validation — it is never reachable without that explicit opt-in.
+    "netops_auto_apply": REVIEW_RECOMMENDED,
 }
 
 _REASON_BY_TIER: dict[str, str] = {
@@ -149,6 +156,9 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "join_runs": ORCHESTRATION,
     # NetOps telemetry collection is a bounded read (no device mutation).
     "netops_collect": READ,
+    # NetOps changes are writes (bounded, reversible, dry-run-planned — but still writes).
+    "netops_apply": WRITE,
+    "netops_auto_apply": WRITE,
 }
 
 # The grant key a step type requires before it may run. Only gated tools appear here; a type not in the
@@ -164,6 +174,8 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "create_note": "evidence_write",
     "add_tag": "evidence_write",
     "netops_collect": "netops_read",
+    "netops_apply": "netops_write",
+    "netops_auto_apply": "netops_write",
 }
 
 # User-facing label per grant key, for honest UI/skip copy.
@@ -174,6 +186,7 @@ GRANT_LABELS: dict[str, str] = {
     "mcp_tools": "Connector tools (MCP)",
     "evidence_write": "Save notes & tags",
     "netops_read": "Network telemetry (read-only)",
+    "netops_write": "Apply network changes",
 }
 
 

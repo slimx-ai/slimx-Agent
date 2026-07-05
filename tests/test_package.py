@@ -37,8 +37,10 @@ def test_contracts_vocabulary_is_coherent():
         "mcp_tools",
         "evidence_write",
         "netops_read",
+        "netops_write",
     }
     assert "netops_collect" in ALLOWED_STEP_TYPES
+    assert {"netops_apply", "netops_auto_apply"} <= set(ALLOWED_STEP_TYPES)
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 22
 
 
@@ -62,6 +64,33 @@ def test_netops_collect_is_grant_gated_review_recommended_read():
     # Under Auto-complete a review_recommended step does not stop; under manual it does.
     assert policies.requires_stop("auto_complete", tier, False) is False
     assert policies.requires_stop("manual", tier, False) is True
+
+
+def test_netops_write_steps_are_grant_gated_and_never_planner_advertised():
+    """netops_apply (Mode 4) hard-gates every change; netops_auto_apply (Mode 5) is
+    review_recommended. Both are WRITE-class, need the netops_write grant, and are NEVER advertised
+    to the planner (a device change must not be model-invented)."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import NETOPS_WRITE_STEP_TYPES
+    from slimx_agent.planning import build_planner_prompt
+
+    assert NETOPS_WRITE_STEP_TYPES == ("netops_apply", "netops_auto_apply")
+    for step_type in NETOPS_WRITE_STEP_TYPES:
+        assert step_type in ALLOWED_STEP_TYPES
+        assert policies.CAPABILITY_BY_TYPE[step_type] == policies.WRITE
+        assert policies.required_grant(step_type) == "netops_write"
+        # Never advertised, even with the grant.
+        assert step_type not in build_planner_prompt("g", allowed_tools=["netops_write"])
+
+    apply_step = type("Step", (), {"type": "netops_apply", "requires_approval": False})()
+    tier, _ = policies.classify_step(apply_step)
+    assert tier == policies.HARD_GATED
+    assert policies.requires_stop("auto_complete", tier, False) is True  # hard gate always stops
+
+    auto_step = type("Step", (), {"type": "netops_auto_apply", "requires_approval": False})()
+    tier2, _ = policies.classify_step(auto_step)
+    assert tier2 == policies.REVIEW_RECOMMENDED
+    assert policies.requires_stop("auto_complete", tier2, False) is False  # Mode 5 can auto-run
 
 
 def test_evidence_step_types_are_ungated_auto_safe_reads():
@@ -187,7 +216,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.3.3"
+    assert slimx_agent.__version__ == "0.4.0"
 
 
 def test_run_id_types_are_uuid_friendly():
