@@ -181,6 +181,7 @@ def build_planner_prompt(
     code_read_granted = "code_read" in grants
     spawn_granted = "spawn_agents" in grants
     evidence_write_granted = "evidence_write" in grants
+    netops_granted = "netops_read" in grants
     _gated_out = set()
     if not web_search_granted:
         _gated_out.add("web_search")
@@ -190,6 +191,8 @@ def build_planner_prompt(
         _gated_out |= {"spawn_run", "join_runs"}
     if not evidence_write_granted:
         _gated_out |= {"create_note", "add_tag"}
+    if not netops_granted:
+        _gated_out.add("netops_collect")
     # mcp_call is never advertised to the planner: it needs structured params (connector_id/
     # tool/arguments) the plan schema cannot carry reliably — it enters plans via templates or
     # the API, and the executor honestly skips a bare planner-emitted one.
@@ -251,6 +254,16 @@ def build_planner_prompt(
             "sub-goal (write the sub-goal as that step's instruction; at most 3 spawn_run steps). Plan "
             "exactly one join_runs step AFTER them — it executes all sub-agents and saves their results "
             "as context — then finish with a model_call or create_synthesis that merges those results. "
+        )
+    if netops_granted:
+        prompt += (
+            "You may collect READ-ONLY network telemetry: netops_collect gathers device/monitoring "
+            "reads (interface/routing/VPN state, metrics, alerts, logs) from the NetOps bridge and "
+            "saves them as evidence later steps reason over. Describe WHAT to collect for the incident "
+            "in the instruction (e.g. 'collect BGP neighbor state and IKE/VPN logs for the flapping "
+            "tunnel'). It never changes a device. Plan it early, then feed its results into a "
+            "model_call (root-cause hypotheses) and a create_synthesis (incident report / remediation "
+            "proposal). "
         )
     prompt += "Set requires_approval=true for any step the user should review before it runs.\n"
     if evidence_hint:

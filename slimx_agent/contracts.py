@@ -64,6 +64,14 @@ BUILD_STEP_TYPES: tuple[str, ...] = (
 # as context for later steps. Gated by the ``spawn_agents`` grant and bounded by depth/width
 # caps; children never inherit the grant, so a run cannot fan out recursively.
 ORCHESTRATION_STEP_TYPES: tuple[str, ...] = ("spawn_run", "join_runs")
+# NetOps vertical pack (SlimX-NetOps): ``netops_collect`` runs a structured bundle of READ-ONLY
+# network telemetry reads (SSH show / SNMP / Prometheus / Alertmanager / logs) through the one
+# bounded MCP boundary against the NetOps bridge connector, and saves the result as a visible
+# context source later steps reason over. GATED by the ``netops_read`` grant (external egress to
+# infra, opt-in per run) but classified ``review_recommended`` — NOT hard-gated — so a whole
+# read-only investigation runs to completion under Auto-complete after one plan approval, rather
+# than stopping on every device read. It never mutates a device; the bridge enforces read-only.
+NETOPS_STEP_TYPES: tuple[str, ...] = ("netops_collect",)
 ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
     + EVIDENCE_STEP_TYPES
@@ -72,6 +80,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + CODE_STEP_TYPES
     + BUILD_STEP_TYPES
     + ORCHESTRATION_STEP_TYPES
+    + NETOPS_STEP_TYPES
 )
 
 # --------------------------------------------------------------------------- grants & modes
@@ -85,6 +94,7 @@ GRANTABLE_TOOLS: tuple[str, ...] = (
     "spawn_agents",
     "mcp_tools",
     "evidence_write",
+    "netops_read",
 )
 
 # What kind of agent run this is — drives the planner prompt, allowed step types, and the UI.

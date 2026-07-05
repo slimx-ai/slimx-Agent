@@ -66,6 +66,10 @@ _TIER_BY_TYPE: dict[str, str] = {
     # own sequence of model calls) — a meaningful review checkpoint, like compare_models.
     "spawn_run": AUTO_SAFE,
     "join_runs": REVIEW_RECOMMENDED,
+    # netops_collect reaches external infra (read-only telemetry), so it is opt-in via the
+    # netops_read grant — but review_recommended, NOT hard_gated: a read-only investigation should
+    # run to completion under Auto-complete after one plan approval, not stop on every device read.
+    "netops_collect": REVIEW_RECOMMENDED,
 }
 
 _REASON_BY_TIER: dict[str, str] = {
@@ -143,6 +147,8 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     # individually gated by the children's grants/policies — never a bypass of either).
     "spawn_run": ORCHESTRATION,
     "join_runs": ORCHESTRATION,
+    # NetOps telemetry collection is a bounded read (no device mutation).
+    "netops_collect": READ,
 }
 
 # The grant key a step type requires before it may run. Only gated tools appear here; a type not in the
@@ -157,6 +163,7 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "join_runs": "spawn_agents",
     "create_note": "evidence_write",
     "add_tag": "evidence_write",
+    "netops_collect": "netops_read",
 }
 
 # User-facing label per grant key, for honest UI/skip copy.
@@ -166,6 +173,7 @@ GRANT_LABELS: dict[str, str] = {
     "spawn_agents": "Sub-agents",
     "mcp_tools": "Connector tools (MCP)",
     "evidence_write": "Save notes & tags",
+    "netops_read": "Network telemetry (read-only)",
 }
 
 

@@ -36,8 +36,32 @@ def test_contracts_vocabulary_is_coherent():
         "spawn_agents",
         "mcp_tools",
         "evidence_write",
+        "netops_read",
     }
+    assert "netops_collect" in ALLOWED_STEP_TYPES
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 22
+
+
+def test_netops_collect_is_grant_gated_review_recommended_read():
+    """netops_collect: a READ-class step, opt-in via the ``netops_read`` grant, and
+    review_recommended (NOT hard-gated) so a read-only investigation runs to completion under
+    Auto-complete rather than stopping on every device read."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import NETOPS_STEP_TYPES
+
+    assert NETOPS_STEP_TYPES == ("netops_collect",)
+    step = type("Step", (), {"type": "netops_collect", "requires_approval": False})()
+    tier, _reason = policies.classify_step(step)
+    assert tier == policies.REVIEW_RECOMMENDED
+    assert policies.CAPABILITY_BY_TYPE["netops_collect"] == policies.READ
+    assert policies.required_grant("netops_collect") == "netops_read"
+    ungranted = type("Run", (), {"allowed_tools_json": []})()
+    granted = type("Run", (), {"allowed_tools_json": ["netops_read"]})()
+    assert policies.permission_block_reason(step, ungranted) is not None
+    assert policies.permission_block_reason(step, granted) is None
+    # Under Auto-complete a review_recommended step does not stop; under manual it does.
+    assert policies.requires_stop("auto_complete", tier, False) is False
+    assert policies.requires_stop("manual", tier, False) is True
 
 
 def test_evidence_step_types_are_ungated_auto_safe_reads():
@@ -163,7 +187,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.3.2"
+    assert slimx_agent.__version__ == "0.3.3"
 
 
 def test_run_id_types_are_uuid_friendly():
