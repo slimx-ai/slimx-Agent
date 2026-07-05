@@ -61,6 +61,13 @@ _TIER_BY_TYPE: dict[str, str] = {
     # Build-agent steps touch a sandboxed per-run workspace; they self-skip outside build mode.
     "write_file": REVIEW_RECOMMENDED,
     "package_artifact": REVIEW_RECOMMENDED,
+    # Code Builder patch loop: propose_patch is model text only (a diff) → auto_safe; applying the
+    # diff and running an allowlisted check mutate/execute in the sandbox → review_recommended;
+    # packaging the diff as an artifact is safe.
+    "propose_patch": AUTO_SAFE,
+    "apply_patch_sandbox": REVIEW_RECOMMENDED,
+    "run_check": REVIEW_RECOMMENDED,
+    "package_patch": AUTO_SAFE,
     # spawn_run only creates + plans a child (additive; nothing executes yet — every child plan
     # is inspectable before join). join_runs is the fan-out execution point (each child is its
     # own sequence of model calls) — a meaningful review checkpoint, like compare_models.
@@ -150,6 +157,11 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "add_tag": WRITE,
     "write_file": WRITE,
     "package_artifact": WRITE,
+    # Code Builder: propose reads+generates (model); apply/check/package mutate or execute (write).
+    "propose_patch": MODEL,
+    "apply_patch_sandbox": WRITE,
+    "run_check": WRITE,
+    "package_patch": WRITE,
     # Master agent: spawn creates+plans child runs; join executes them (their own steps stay
     # individually gated by the children's grants/policies — never a bypass of either).
     "spawn_run": ORCHESTRATION,
@@ -169,6 +181,12 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "mcp_call": "mcp_tools",
     "code_search": "code_read",
     "code_read": "code_read",
+    # Code Builder: propose reads source (code_read); apply/check/package mutate the sandbox
+    # (code_write). The Code Builder pack requires both grants.
+    "propose_patch": "code_read",
+    "apply_patch_sandbox": "code_write",
+    "run_check": "code_write",
+    "package_patch": "code_write",
     "spawn_run": "spawn_agents",
     "join_runs": "spawn_agents",
     "create_note": "evidence_write",
@@ -182,6 +200,7 @@ _GRANT_BY_TYPE: dict[str, str] = {
 GRANT_LABELS: dict[str, str] = {
     "web_search": "Web search",
     "code_read": "Codebase (read-only)",
+    "code_write": "Edit code (sandboxed patches)",
     "spawn_agents": "Sub-agents",
     "mcp_tools": "Connector tools (MCP)",
     "evidence_write": "Save notes & tags",

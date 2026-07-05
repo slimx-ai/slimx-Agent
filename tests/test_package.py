@@ -33,6 +33,7 @@ def test_contracts_vocabulary_is_coherent():
     assert set(GRANTABLE_TOOLS) == {
         "web_search",
         "code_read",
+        "code_write",
         "spawn_agents",
         "mcp_tools",
         "evidence_write",
@@ -41,7 +42,41 @@ def test_contracts_vocabulary_is_coherent():
     }
     assert "netops_collect" in ALLOWED_STEP_TYPES
     assert {"netops_apply", "netops_auto_apply"} <= set(ALLOWED_STEP_TYPES)
+    assert {"propose_patch", "apply_patch_sandbox", "run_check", "package_patch"} <= set(
+        ALLOWED_STEP_TYPES
+    )
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 22
+
+
+def test_code_build_steps_are_a_graduated_patch_loop():
+    """Code Builder: propose is model-only (auto_safe, code_read); apply/run_check mutate/execute
+    the sandbox (review_recommended, code_write); package bundles the diff (auto_safe, code_write)."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import CODE_BUILD_STEP_TYPES
+
+    assert CODE_BUILD_STEP_TYPES == (
+        "propose_patch",
+        "apply_patch_sandbox",
+        "run_check",
+        "package_patch",
+    )
+
+    def tier(step_type: str) -> str:
+        step = type("Step", (), {"type": step_type, "requires_approval": False})()
+        return policies.classify_step(step)[0]
+
+    assert tier("propose_patch") == policies.AUTO_SAFE
+    assert tier("apply_patch_sandbox") == policies.REVIEW_RECOMMENDED
+    assert tier("run_check") == policies.REVIEW_RECOMMENDED
+    assert tier("package_patch") == policies.AUTO_SAFE
+
+    assert policies.required_grant("propose_patch") == "code_read"
+    for step_type in ("apply_patch_sandbox", "run_check", "package_patch"):
+        assert policies.required_grant(step_type) == "code_write"
+    assert policies.CAPABILITY_BY_TYPE["propose_patch"] == policies.MODEL
+    assert policies.CAPABILITY_BY_TYPE["apply_patch_sandbox"] == policies.WRITE
+    # code_write is a real, labeled grant.
+    assert "code_write" in policies.GRANT_LABELS
 
 
 def test_netops_collect_is_grant_gated_review_recommended_read():
@@ -216,7 +251,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.4.0"
+    assert slimx_agent.__version__ == "0.5.0"
 
 
 def test_run_id_types_are_uuid_friendly():

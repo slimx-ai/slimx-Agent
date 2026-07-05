@@ -59,6 +59,20 @@ BUILD_STEP_TYPES: tuple[str, ...] = (
     "write_file",
     "package_artifact",
 )
+# Code Builder patch loop (Stage 4c): a professional propose→apply→check→package cycle over the
+# per-run sandbox, so "code this" produces a reviewable patch instead of a blind file dump.
+# ``propose_patch`` generates a unified diff over named sandbox files (model text only — no
+# mutation, so classified AUTO_SAFE and gated by ``code_read``); ``apply_patch_sandbox`` applies
+# that diff inside the sandbox (WRITE, review_recommended); ``run_check`` runs one ALLOWLISTED
+# check command (pytest/ruff/npm test …) in the sandbox (host-fenced behind its own flag; a
+# non-allowlisted command is refused, never gated); ``package_patch`` bundles the diff as a
+# ``code_patch`` artifact. The three mutating/executing steps are gated by the ``code_write`` grant.
+CODE_BUILD_STEP_TYPES: tuple[str, ...] = (
+    "propose_patch",
+    "apply_patch_sandbox",
+    "run_check",
+    "package_patch",
+)
 # Master-agent orchestration: ``spawn_run`` creates AND plans a child run (a "sub-agent") for
 # one focused sub-goal; ``join_runs`` executes the spawned children and collects their outcomes
 # as context for later steps. Gated by the ``spawn_agents`` grant and bounded by depth/width
@@ -87,6 +101,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + EXTERNAL_STEP_TYPES
     + CODE_STEP_TYPES
     + BUILD_STEP_TYPES
+    + CODE_BUILD_STEP_TYPES
     + ORCHESTRATION_STEP_TYPES
     + NETOPS_STEP_TYPES
     + NETOPS_WRITE_STEP_TYPES
@@ -100,6 +115,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
 GRANTABLE_TOOLS: tuple[str, ...] = (
     "web_search",
     "code_read",
+    "code_write",
     "spawn_agents",
     "mcp_tools",
     "evidence_write",
