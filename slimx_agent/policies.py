@@ -92,6 +92,13 @@ _TIER_BY_TYPE: dict[str, str] = {
     # Auto-complete, but the host fences it behind a flag + a low-risk change-type allowlist and
     # auto-rolls-back on failed validation — it is never reachable without that explicit opt-in.
     "netops_auto_apply": REVIEW_RECOMMENDED,
+    # Structured-data reads reach a warehouse through the SlimX-Data bridge — opt-in via the
+    # data_read grant, but review_recommended (NOT hard-gated) so a granted investigation runs
+    # to completion under Auto-complete, exactly like netops_collect. analyze_data computes over
+    # ALREADY-FETCHED rows in the bridge's sandboxed DuckDB (no new source access) — auto-safe.
+    "data_catalog": REVIEW_RECOMMENDED,
+    "data_query": REVIEW_RECOMMENDED,
+    "analyze_data": AUTO_SAFE,
     # research_iterate is a local model call whose only side effect is MORE PLAN: every appended
     # step is allowlist-validated and passes these same permission/approval gates itself, and the
     # host bounds the loop (iteration budget) — so the checkpoint can auto-run; the risky steps it
@@ -195,6 +202,10 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "netops_auto_apply": WRITE,
     # The research checkpoint is a structured model call; its plan extension is host-validated.
     "research_iterate": MODEL,
+    # Structured-data reads (bridge-enforced read-only); analyze computes over fetched rows.
+    "data_catalog": READ,
+    "data_query": READ,
+    "analyze_data": READ,
 }
 
 # The grant key a step type requires before it may run. Only gated tools appear here; a type not in the
@@ -222,6 +233,9 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "netops_collect": "netops_read",
     "netops_apply": "netops_write",
     "netops_auto_apply": "netops_write",
+    "data_catalog": "data_read",
+    "data_query": "data_read",
+    "analyze_data": "data_read",
 }
 
 # User-facing label per grant key, for honest UI/skip copy.
@@ -234,6 +248,7 @@ GRANT_LABELS: dict[str, str] = {
     "evidence_write": "Save notes & tags",
     "netops_read": "Network telemetry (read-only)",
     "netops_write": "Apply network changes",
+    "data_read": "Data sources (read-only SQL)",
 }
 
 

@@ -182,6 +182,7 @@ def build_planner_prompt(
     spawn_granted = "spawn_agents" in grants
     evidence_write_granted = "evidence_write" in grants
     netops_granted = "netops_read" in grants
+    data_granted = "data_read" in grants
     _gated_out = set()
     if not web_search_granted:
         _gated_out.add("web_search")
@@ -193,6 +194,8 @@ def build_planner_prompt(
         _gated_out |= {"create_note", "add_tag"}
     if not netops_granted:
         _gated_out.add("netops_collect")
+    if not data_granted:
+        _gated_out |= {"data_catalog", "data_query", "analyze_data"}
     # mcp_call is never advertised to the planner: it needs structured params (connector_id/
     # tool/arguments) the plan schema cannot carry reliably — it enters plans via templates or
     # the API, and the executor honestly skips a bare planner-emitted one.

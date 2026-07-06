@@ -121,6 +121,16 @@ NETOPS_WRITE_STEP_TYPES: tuple[str, ...] = ("netops_apply", "netops_auto_apply")
 # whole path behind its own feature flag and loads plugins only from an explicit configured
 # directory — never from the browser. Never advertised to the planner (structured params only).
 PLUGIN_STEP_TYPES: tuple[str, ...] = ("plugin_tool",)
+# Structured-data reads (0.10, the SlimX-Data bridge): ``data_catalog`` maps the ALLOWED data
+# universe (sources, allowlisted tables + columns, curated metrics) as a visible context source;
+# ``data_query`` runs ONE read-only SELECT against one source (the executor writes the SQL from
+# the step instruction against the real schema; the bridge enforces SELECT-only + the table
+# allowlist + row/byte/time caps); ``analyze_data`` aggregates/joins ALREADY-FETCHED result sets
+# in the bridge's sandboxed DuckDB (engine math, never model arithmetic; no source access). All
+# three are GATED by the ``data_read`` grant (reaching a warehouse is opt-in per run) and
+# classified ``review_recommended``/``auto_safe`` below so a granted investigation runs to
+# completion under Auto-complete. Never a write path: the bridge has no write tools at all.
+DATA_STEP_TYPES: tuple[str, ...] = ("data_catalog", "data_query", "analyze_data")
 # Deep-research loop (0.9): ``research_iterate`` is the governed investigation checkpoint — it
 # reviews everything the run has gathered, records findings/open questions on the run's research
 # ledger, and (when the goal is not yet satisfied) EXTENDS the live plan with follow-up steps.
@@ -144,6 +154,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + NETOPS_WRITE_STEP_TYPES
     + PLUGIN_STEP_TYPES
     + RESEARCH_STEP_TYPES
+    + DATA_STEP_TYPES
 )
 
 # --------------------------------------------------------------------------- run budgets
@@ -172,6 +183,7 @@ GRANTABLE_TOOLS: tuple[str, ...] = (
     "netops_read",
     "netops_write",
     "plugin_tools",
+    "data_read",
 )
 
 # What kind of agent run this is — drives the planner prompt, allowed step types, and the UI.
