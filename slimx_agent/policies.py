@@ -44,6 +44,8 @@ _TIER_BY_TYPE: dict[str, str] = {
     # mcp_call invokes an arbitrary (possibly write-capable) connector tool — every call is a
     # safety checkpoint, on top of the mcp_tools grant and the connector's allowedTools list.
     "mcp_call": HARD_GATED,
+    # Plugin tools execute admin-installed code the contract cannot classify — always stop.
+    "plugin_tool": HARD_GATED,
     # Read-only codebase tools: local, bounded, no execution, no egress — additive like rag_retrieve.
     # They only run when the run granted the ``code_read`` tool, so auto-running when present is safe.
     "code_search": AUTO_SAFE,
@@ -154,6 +156,7 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "save_evidence": PERSISTENT,
     "web_search": EXTERNAL,
     "mcp_call": EXTERNAL,
+    "plugin_tool": EXTERNAL,
     "code_search": READ,
     "code_read": READ,
     "project_inventory": READ,
@@ -189,6 +192,7 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
 _GRANT_BY_TYPE: dict[str, str] = {
     "web_search": "web_search",
     "mcp_call": "mcp_tools",
+    "plugin_tool": "plugin_tools",
     "code_search": "code_read",
     "code_read": "code_read",
     # Code Builder: propose reads source (code_read); apply/check/package mutate the sandbox

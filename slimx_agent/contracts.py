@@ -113,6 +113,14 @@ NETOPS_STEP_TYPES: tuple[str, ...] = ("netops_collect",)
 # host additionally fences behind a flag + a low-risk change-type allowlist. Every change is
 # dry-run-planned, rollback-carrying, validated after, and recorded — never a blind mutation.
 NETOPS_WRITE_STEP_TYPES: tuple[str, ...] = ("netops_apply", "netops_auto_apply")
+# Trusted Tool Plugins (admin-installed, reviewed, code-bearing host plugins — the mcp_call
+# design applied to local plugin code): ONE generic step type executes many plugin-declared
+# tools; the step's params name the plugin + tool. GATED by the ``plugin_tools`` grant AND
+# HARD-GATED (every invocation stops for explicit human approval, even in Auto-complete) because
+# a plugin runs beyond-contract code the host cannot classify. The host additionally fences the
+# whole path behind its own feature flag and loads plugins only from an explicit configured
+# directory — never from the browser. Never advertised to the planner (structured params only).
+PLUGIN_STEP_TYPES: tuple[str, ...] = ("plugin_tool",)
 ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
     + EVIDENCE_STEP_TYPES
@@ -126,6 +134,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + ORCHESTRATION_STEP_TYPES
     + NETOPS_STEP_TYPES
     + NETOPS_WRITE_STEP_TYPES
+    + PLUGIN_STEP_TYPES
 )
 
 # --------------------------------------------------------------------------- grants & modes
@@ -142,6 +151,7 @@ GRANTABLE_TOOLS: tuple[str, ...] = (
     "evidence_write",
     "netops_read",
     "netops_write",
+    "plugin_tools",
 )
 
 # What kind of agent run this is — drives the planner prompt, allowed step types, and the UI.

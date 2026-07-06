@@ -39,6 +39,7 @@ def test_contracts_vocabulary_is_coherent():
         "evidence_write",
         "netops_read",
         "netops_write",
+        "plugin_tools",
     }
     assert "netops_collect" in ALLOWED_STEP_TYPES
     assert {"netops_apply", "netops_auto_apply"} <= set(ALLOWED_STEP_TYPES)
@@ -256,7 +257,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.7.0"
+    assert slimx_agent.__version__ == "0.8.0"
 
 
 def test_run_id_types_are_uuid_friendly():
@@ -279,3 +280,18 @@ def test_new_write_step_types_are_evidence_write_gated_review_points():
         tier, _reason = policies.classify_step(step)
         assert tier == policies.REVIEW_RECOMMENDED
     assert policies.required_grant("conversation_search") is None
+
+
+def test_plugin_tool_is_hard_gated_behind_the_plugin_tools_grant():
+    """0.8.0: ONE generic plugin_tool step executes many admin-installed plugin tools (the
+    mcp_call design applied to local plugin code) — granted AND hard-gated, never auto-run."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import GRANTABLE_TOOLS, PLUGIN_STEP_TYPES
+
+    assert PLUGIN_STEP_TYPES == ("plugin_tool",)
+    assert "plugin_tool" in ALLOWED_STEP_TYPES
+    assert "plugin_tools" in GRANTABLE_TOOLS
+    assert policies.required_grant("plugin_tool") == "plugin_tools"
+    step = type("Step", (), {"type": "plugin_tool", "requires_approval": False})()
+    tier, _reason = policies.classify_step(step)
+    assert tier == policies.HARD_GATED  # every invocation stops for the user
