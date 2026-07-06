@@ -260,7 +260,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.12.0"
+    assert slimx_agent.__version__ == "0.13.0"
 
 
 def test_run_id_types_are_uuid_friendly():

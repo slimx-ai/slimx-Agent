@@ -110,6 +110,54 @@ def create_app(host_client: HostClient | None = None) -> FastAPI:
             "auth_enabled": bool(os.environ.get("SLIMX_AGENT_INTERNAL_TOKEN")),
         }
 
+    @app.post("/internal/run-check")
+    def run_check(
+        body: dict,
+        _: None = Depends(require_internal_token),
+    ) -> dict[str, Any]:
+        """Isolated check execution (Phase 5 hardening): run ONE host-allowlisted check command
+        inside THIS container — which holds no DB, no credentials, no ControlRoom code — instead
+        of the api container. The HOST still owns the allowlist decision (it only sends commands
+        it already validated); this endpoint re-enforces the mechanical bounds: shell=False,
+        scrubbed env, pinned cwd under the shared workspace volume, timeout, output cap. It never
+        interprets or expands the command."""
+        import os
+        import subprocess
+
+        argv = body.get("argv")
+        run_id = str(body.get("run_id") or "").strip()
+        timeout = min(float(body.get("timeout_seconds") or 120.0), 600.0)
+        output_cap = min(int(body.get("output_cap") or 20_000), 100_000)
+        workspace_root = os.environ.get("AGENT_WORKSPACE_ROOT", "/workspaces")
+        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+            raise HTTPException(status_code=422, detail="argv must be a non-empty list of strings")
+        if not run_id or "/" in run_id or ".." in run_id:
+            raise HTTPException(status_code=422, detail="run_id must be a plain identifier")
+        cwd = os.path.join(workspace_root, run_id)
+        if not os.path.isdir(cwd):
+            raise HTTPException(status_code=404, detail="run workspace not found on this volume")
+        scrubbed_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/tmp"}
+        try:
+            completed = subprocess.run(
+                argv,
+                cwd=cwd,
+                env=scrubbed_env,
+                shell=False,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "exit_code": None, "timed_out": True, "output": ""}
+        except FileNotFoundError as exc:
+            return {"ok": False, "exit_code": None, "timed_out": False, "output": str(exc)[:500]}
+        output = (completed.stdout + completed.stderr).decode("utf-8", "replace")[:output_cap]
+        return {
+            "ok": completed.returncode == 0,
+            "exit_code": completed.returncode,
+            "timed_out": False,
+            "output": output,
+        }
+
     @app.post("/agent/runs/{run_id}/execute")
     def execute_run(
         run_id: str, body: ProfileBody, _: None = Depends(require_internal_token)
