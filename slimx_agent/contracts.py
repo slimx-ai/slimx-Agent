@@ -47,7 +47,15 @@ CODE_STEP_TYPES: tuple[str, ...] = ("code_search", "code_read")
 # retrieves highlights/comments by tag/kind/keyword as a cited evidence pack; ``document_read``
 # reads one project document's extracted text (bounded). All three self-skip honestly when the
 # run has no project scope or the project has no matching material.
-EVIDENCE_STEP_TYPES: tuple[str, ...] = ("project_inventory", "evidence_query", "document_read")
+EVIDENCE_STEP_TYPES: tuple[str, ...] = (
+    "project_inventory",
+    "evidence_query",
+    "document_read",
+    # ``conversation_search`` searches the active project's conversations by keyword and saves a
+    # bounded, cited excerpt pack as a context source — same read discipline as evidence_query
+    # (project-scoped, local-only, no grant, honest skip when nothing matches).
+    "conversation_search",
+)
 # Project-evidence WRITES: additive, reversible, in-scope-to-the-user's-own-project mutations —
 # ``create_note`` saves a comment (Note) anchored in the active project; ``add_tag`` attaches a
 # label to an existing project highlight/comment. GATED by the ``evidence_write`` grant (off by
@@ -55,11 +63,17 @@ EVIDENCE_STEP_TYPES: tuple[str, ...] = ("project_inventory", "evidence_query", "
 # and classified ``review_recommended`` so they still stop for review under manual/review policies.
 # Never destructive: no deletes, no cross-project writes, no external egress.
 EVIDENCE_WRITE_STEP_TYPES: tuple[str, ...] = ("create_note", "add_tag")
-# Task WRITES: additive, reversible, in-project task creation — ``create_work_item`` turns a run
-# finding into a durable Work Item (task). GATED by the ``evidence_write`` grant (reused: it is the
-# same "save additive project state" opt-in as create_note/add_tag) and classified
-# ``review_recommended``. Never destructive: no deletes, no cross-workspace/project writes, no egress.
-TASK_STEP_TYPES: tuple[str, ...] = ("create_work_item",)
+# Task WRITES: additive, reversible, in-project task mutations — ``create_work_item`` turns a run
+# finding into a durable Work Item (task); ``link_work_item`` attaches an existing task to a
+# document/conversation so the task carries its evidence trail. GATED by the ``evidence_write``
+# grant (reused: it is the same "save additive project state" opt-in as create_note/add_tag) and
+# classified ``review_recommended``. Never destructive: no deletes, no cross-workspace/project
+# writes, no egress.
+TASK_STEP_TYPES: tuple[str, ...] = ("create_work_item", "link_work_item")
+# Knowledge WRITES: ``promote_to_knowledge`` promotes a synthesis this run produced into the
+# project Knowledge Base (curated trust; optionally as a decision). Additive and reversible in the
+# knowledge UI, GATED by the same ``evidence_write`` opt-in, classified ``review_recommended``.
+KNOWLEDGE_WRITE_STEP_TYPES: tuple[str, ...] = ("promote_to_knowledge",)
 BUILD_STEP_TYPES: tuple[str, ...] = (
     "write_file",
     "package_artifact",
@@ -104,6 +118,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + EVIDENCE_STEP_TYPES
     + EVIDENCE_WRITE_STEP_TYPES
     + TASK_STEP_TYPES
+    + KNOWLEDGE_WRITE_STEP_TYPES
     + EXTERNAL_STEP_TYPES
     + CODE_STEP_TYPES
     + BUILD_STEP_TYPES

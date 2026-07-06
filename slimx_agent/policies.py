@@ -53,6 +53,7 @@ _TIER_BY_TYPE: dict[str, str] = {
     "project_inventory": AUTO_SAFE,
     "evidence_query": AUTO_SAFE,
     "document_read": AUTO_SAFE,
+    "conversation_search": AUTO_SAFE,
     # Project-evidence writes: additive/reversible in-project mutations behind the evidence_write
     # grant — a meaningful review point (they change what the user sees on their evidence board),
     # but never a hard gate (local, reversible, no egress).
@@ -60,6 +61,9 @@ _TIER_BY_TYPE: dict[str, str] = {
     "add_tag": REVIEW_RECOMMENDED,
     # Task creation: additive/reversible project write, like create_note — a review point, never a gate.
     "create_work_item": REVIEW_RECOMMENDED,
+    "link_work_item": REVIEW_RECOMMENDED,
+    # Knowledge promotion: additive/reversible curation of the project Knowledge Base.
+    "promote_to_knowledge": REVIEW_RECOMMENDED,
     # Build-agent steps touch a sandboxed per-run workspace; they self-skip outside build mode.
     "write_file": REVIEW_RECOMMENDED,
     "package_artifact": REVIEW_RECOMMENDED,
@@ -155,9 +159,12 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "project_inventory": READ,
     "evidence_query": READ,
     "document_read": READ,
+    "conversation_search": READ,
     "create_note": PERSISTENT,
     "add_tag": WRITE,
     "create_work_item": PERSISTENT,
+    "link_work_item": WRITE,
+    "promote_to_knowledge": PERSISTENT,
     "write_file": WRITE,
     "package_artifact": WRITE,
     # Code Builder: propose reads+generates (model); apply/check/package mutate or execute (write).
@@ -195,6 +202,8 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "create_note": "evidence_write",
     "add_tag": "evidence_write",
     "create_work_item": "evidence_write",
+    "link_work_item": "evidence_write",
+    "promote_to_knowledge": "evidence_write",
     "netops_collect": "netops_read",
     "netops_apply": "netops_write",
     "netops_auto_apply": "netops_write",

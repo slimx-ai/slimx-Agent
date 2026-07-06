@@ -134,7 +134,12 @@ def test_evidence_step_types_are_ungated_auto_safe_reads():
     from slimx_agent import policies
     from slimx_agent.contracts import EVIDENCE_STEP_TYPES
 
-    assert EVIDENCE_STEP_TYPES == ("project_inventory", "evidence_query", "document_read")
+    assert EVIDENCE_STEP_TYPES == (
+        "project_inventory",
+        "evidence_query",
+        "document_read",
+        "conversation_search",
+    )
     for step_type in EVIDENCE_STEP_TYPES:
         assert step_type in ALLOWED_STEP_TYPES
         step = type("Step", (), {"type": step_type, "requires_approval": False})()
@@ -251,9 +256,26 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.5.0"
+    assert slimx_agent.__version__ == "0.7.0"
 
 
 def test_run_id_types_are_uuid_friendly():
     # The runtime protocol talks UUIDs; make sure nothing in the core assumes strings.
     assert isinstance(uuid.uuid4(), uuid.UUID)
+
+
+def test_new_write_step_types_are_evidence_write_gated_review_points():
+    """0.7.0: link_work_item (task link) and promote_to_knowledge (KB promotion) are additive
+    project writes behind the reused evidence_write grant; conversation_search stays a free read."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import KNOWLEDGE_WRITE_STEP_TYPES, TASK_STEP_TYPES
+
+    assert TASK_STEP_TYPES == ("create_work_item", "link_work_item")
+    assert KNOWLEDGE_WRITE_STEP_TYPES == ("promote_to_knowledge",)
+    for step_type in (*TASK_STEP_TYPES, *KNOWLEDGE_WRITE_STEP_TYPES):
+        assert step_type in ALLOWED_STEP_TYPES
+        assert policies.required_grant(step_type) == "evidence_write"
+        step = type("Step", (), {"type": step_type, "requires_approval": False})()
+        tier, _reason = policies.classify_step(step)
+        assert tier == policies.REVIEW_RECOMMENDED
+    assert policies.required_grant("conversation_search") is None
