@@ -46,7 +46,8 @@ def test_contracts_vocabulary_is_coherent():
     assert {"propose_patch", "apply_patch_sandbox", "run_check", "package_patch"} <= set(
         ALLOWED_STEP_TYPES
     )
-    assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 22
+    assert "research_iterate" in ALLOWED_STEP_TYPES
+    assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 24
 
 
 def test_code_build_steps_are_a_graduated_patch_loop():
@@ -257,7 +258,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.8.0"
+    assert slimx_agent.__version__ == "0.9.0"
 
 
 def test_run_id_types_are_uuid_friendly():

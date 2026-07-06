@@ -17,6 +17,7 @@ auto-iterate epilogue).
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -26,6 +27,9 @@ from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistr
 
 # Run statuses a run cannot transition out of.
 TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
+
+# Monotonic clock for the wall budget, as a module alias so tests can stub it.
+_now = time.monotonic
 
 # ``on_run_end(run, status)`` — called once when the loop finishes a run as "completed" or
 # "failed" (after the terminal event is appended, before the final drain, so anything the
@@ -76,16 +80,36 @@ def execute_run_events(
         return
     store.set_run_status(run, "running")
     yield from drain()
+    drive_started = _now()
 
-    for step in store.get_steps(run.id):
+    # A re-fetching loop (not a snapshot iteration) so steps a handler APPENDS mid-run — a
+    # research_iterate plan extension — join this same drive: each pass re-reads the step list
+    # and takes the first step that is not yet completed/skipped, exactly the order the old
+    # snapshot loop executed. Termination is structural: run_step always leaves its step in a
+    # terminal state, so every pass either finishes one more step or exits.
+    while True:
         current = store.get_run(run.id)
         if current is not None and current.status in ("paused", "cancelled"):
             yield from drain()
             return
-        if step.status in ("completed", "skipped"):
-            continue
+        steps = store.get_steps(run.id)
+        step = next((s for s in steps if s.status not in ("completed", "skipped")), None)
+        if step is None:
+            break  # every step is done — fall through to the completion block
         if step.status == "failed":
             store.set_run_status(run, "failed")
+            yield from drain()
+            return
+        # Budget gate — before any work on the next step. Exhaustion is an honest PAUSE (event
+        # with the reason, then the paused status), never a silent truncation: the user raises
+        # the budget and re-executes, or accepts the partial result.
+        budget_reason = _budget_exhausted_reason(current or run, steps, drive_started)
+        if budget_reason is not None:
+            store.append_event(
+                run.id, contracts.BUDGET_EXHAUSTED, payload={"reason": budget_reason}
+            )
+            store.set_run_status(run, "paused")
+            store.append_event(run.id, contracts.RUN_PAUSED, payload={"reason": budget_reason})
             yield from drain()
             return
         # Tool-permission gate — runs BEFORE the approval gate so an ungranted external tool
@@ -176,6 +200,26 @@ def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile
         payload={"type": fresh.type, **(output_refs or {})},
     )
     return fresh
+
+
+def _budget_exhausted_reason(run: Any, steps: list[Any], drive_started: float) -> str | None:
+    """Why the run's budget forbids executing the next step, or ``None`` while within budget.
+
+    Budgets are duck-typed run attributes (see ``contracts.RUN_BUDGET_FIELDS``); absent/None/
+    non-positive values mean unbounded, so budget-less hosts and legacy rows never pause.
+    ``budget_max_steps`` counts EXECUTED steps (completed or failed — skips did no work);
+    ``budget_max_wall_seconds`` is wall clock for THIS drive only (a resume starts fresh)."""
+    max_steps = getattr(run, "budget_max_steps", None)
+    if isinstance(max_steps, int) and max_steps > 0:
+        executed = sum(1 for s in steps if s.status in ("completed", "failed"))
+        if executed >= max_steps:
+            return f"step budget reached ({executed}/{max_steps} steps executed)"
+    max_wall = getattr(run, "budget_max_wall_seconds", None)
+    if isinstance(max_wall, int) and max_wall > 0:
+        elapsed = _now() - drive_started
+        if elapsed >= max_wall:
+            return f"time budget reached ({int(elapsed)}s of {max_wall}s for this execution)"
+    return None
 
 
 def resolve_gate(

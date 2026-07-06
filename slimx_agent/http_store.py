@@ -25,6 +25,10 @@ class RunSnapshot:
     approval_policy: str | None
     auto_approve: bool
     allowed_tools_json: list[str] | None
+    # Engine-enforced run budgets (0.9, contracts.RUN_BUDGET_FIELDS). None/absent = unbounded,
+    # so a pre-budget host wire shape behaves exactly as before.
+    budget_max_steps: int | None = None
+    budget_max_wall_seconds: int | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -35,8 +39,17 @@ class RunSnapshot:
             approval_policy=data.get("approval_policy"),
             auto_approve=bool(data.get("auto_approve", False)),
             allowed_tools_json=data.get("allowed_tools_json"),
+            budget_max_steps=_opt_int(data.get("budget_max_steps")),
+            budget_max_wall_seconds=_opt_int(data.get("budget_max_wall_seconds")),
             raw=data,
         )
+
+
+def _opt_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass

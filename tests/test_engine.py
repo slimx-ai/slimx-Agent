@@ -260,3 +260,78 @@ def test_policies_reexports_cover_the_gate_api():
     assert policies.classify_step(FakeStep("s", "web_search"))[0] == policies.HARD_GATED
     assert policies.requires_stop("auto_complete", policies.AUTO_SAFE, False) is False
     assert policies.normalize_grants(["web_search", "nope", "web_search"]) == ["web_search"]
+
+
+# --- Deep-research loop (0.9): mid-run plan extension + engine-enforced budgets ---
+
+
+def test_steps_appended_mid_run_join_the_same_drive():
+    """The re-fetching loop's contract: a handler that APPENDS steps (research_iterate's plan
+    extension) sees them executed in this same drive, in order, and the run completes."""
+    store = MemoryStore(
+        FakeRun("r"), [FakeStep("s1", "model_call"), FakeStep("s2", "research_iterate")]
+    )
+    executed: list[str] = []
+
+    def extend(ctx, run, step, profile):
+        executed.append(step.id)
+        store.steps.append(FakeStep("s3", "model_call", title="follow-up"))
+        return {"added_steps": 1}
+
+    registry = ToolRegistry()
+    registry.register(
+        "model_call", lambda ctx, run, step, profile: executed.append(step.id) or {"ref": step.id}
+    )
+    registry.register("research_iterate", extend)
+    engine.execute_run(store, registry, store.run, profile=object())
+    assert executed == ["s1", "s2", "s3"]
+    assert store.run.status == "completed"
+    assert [s.status for s in store.steps] == ["completed", "completed", "completed"]
+
+
+def test_step_budget_pauses_the_run_honestly():
+    """Exhausting budget_max_steps stops BEFORE the next step with a BUDGET_EXHAUSTED event and
+    a paused (resumable) run — never a silent truncation, never a fake completion."""
+    run = FakeRun("r")
+    run.budget_max_steps = 1
+    store = MemoryStore(run, [FakeStep("s1", "model_call"), FakeStep("s2", "model_call")])
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "paused"
+    assert [s.status for s in store.steps] == ["completed", "pending"]
+    types = _types(store)
+    assert contracts.BUDGET_EXHAUSTED in types
+    assert contracts.RUN_PAUSED in types
+    assert contracts.RUN_COMPLETED not in types
+    exhausted = next(e for e in store.events if e["type"] == contracts.BUDGET_EXHAUSTED)
+    assert "step budget" in exhausted["payload_json"]["reason"]
+
+
+def test_wall_budget_pauses_between_steps(monkeypatch):
+    run = FakeRun("r")
+    run.budget_max_wall_seconds = 10
+    store = MemoryStore(run, [FakeStep("s1", "model_call"), FakeStep("s2", "model_call")])
+    # anchor(0) -> first check within budget(1) -> s1 runs -> second check exceeds(100)
+    clock = iter([0.0, 1.0, 100.0, 200.0])
+    monkeypatch.setattr(engine, "_now", lambda: next(clock))
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "paused"
+    assert [s.status for s in store.steps] == ["completed", "pending"]
+    exhausted = next(e for e in store.events if e["type"] == contracts.BUDGET_EXHAUSTED)
+    assert "time budget" in exhausted["payload_json"]["reason"]
+
+
+def test_budget_less_runs_are_unbounded_and_unchanged():
+    """Legacy hosts/rows carry no budget attributes at all — getattr defaults keep them running."""
+    store = MemoryStore(FakeRun("r"), [FakeStep(f"s{i}", "model_call") for i in range(5)])
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "completed"
+    assert contracts.BUDGET_EXHAUSTED not in _types(store)
+
+
+def test_research_iterate_classifies_auto_safe():
+    from slimx_agent import policies
+
+    tier, reason = policies.classify_step(FakeStep("s", "research_iterate"))
+    assert tier == policies.AUTO_SAFE
+    assert "extend the plan" in reason
+    assert policies.required_grant("research_iterate") is None

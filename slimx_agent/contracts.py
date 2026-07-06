@@ -121,6 +121,14 @@ NETOPS_WRITE_STEP_TYPES: tuple[str, ...] = ("netops_apply", "netops_auto_apply")
 # whole path behind its own feature flag and loads plugins only from an explicit configured
 # directory — never from the browser. Never advertised to the planner (structured params only).
 PLUGIN_STEP_TYPES: tuple[str, ...] = ("plugin_tool",)
+# Deep-research loop (0.9): ``research_iterate`` is the governed investigation checkpoint — it
+# reviews everything the run has gathered, records findings/open questions on the run's research
+# ledger, and (when the goal is not yet satisfied) EXTENDS the live plan with follow-up steps.
+# The extension is structural, never a bypass: appended steps are validated against this same
+# allowlist and pass the identical permission + approval gates as originally-planned steps, the
+# host bounds the loop with a per-run iteration budget, and the engine's run budgets (below)
+# bound total execution. Hosts advertise it to the planner only for research-mode runs.
+RESEARCH_STEP_TYPES: tuple[str, ...] = ("research_iterate",)
 ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
     + EVIDENCE_STEP_TYPES
@@ -135,7 +143,19 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + NETOPS_STEP_TYPES
     + NETOPS_WRITE_STEP_TYPES
     + PLUGIN_STEP_TYPES
+    + RESEARCH_STEP_TYPES
 )
+
+# --------------------------------------------------------------------------- run budgets
+# Engine-enforced run budgets (0.9). Duck-typed run attributes, all optional — an absent or
+# ``None`` field means unbounded, so pre-budget hosts and legacy rows are byte-for-byte
+# unchanged. ``budget_max_steps`` bounds how many steps may EXECUTE across the whole run
+# (completed or failed — honest skips are free), which also bounds a growing plan;
+# ``budget_max_wall_seconds`` bounds ONE execution drive's wall clock (each resume gets a
+# fresh window — it protects the server, not the calendar). Exhaustion is never silent: the
+# engine emits BUDGET_EXHAUSTED and pauses the run so the user can raise the budget and
+# continue, or accept the partial result.
+RUN_BUDGET_FIELDS: tuple[str, ...] = ("budget_max_steps", "budget_max_wall_seconds")
 
 # --------------------------------------------------------------------------- grants & modes
 # Grant keys a run may list in ``allowed_tools_json`` to opt into an optional/external tool.
@@ -202,6 +222,12 @@ FILE_WRITTEN = "agent.file.written"
 # statuses only — the children's own event trails hold their detail.
 RUN_SPAWNED = "agent.run.spawned"
 RUN_JOINED = "agent.run.joined"
+# Deep-research loop (additive, 0.9): the plan GREW mid-run — a research_iterate step appended
+# validated follow-up steps (payload: plan_version / added_steps / iteration counts, never step
+# text) — and a run budget ran out (the engine paused the run honestly, with the reason, instead
+# of truncating work silently).
+PLAN_EXTENDED = "agent.plan.extended"
+BUDGET_EXHAUSTED = "agent.run.budget_exhausted"
 
 EVENT_TYPES: tuple[str, ...] = (
     RUN_CREATED,
@@ -226,4 +252,6 @@ EVENT_TYPES: tuple[str, ...] = (
     FILE_WRITTEN,
     RUN_SPAWNED,
     RUN_JOINED,
+    PLAN_EXTENDED,
+    BUDGET_EXHAUSTED,
 )

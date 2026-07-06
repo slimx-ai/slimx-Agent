@@ -92,6 +92,11 @@ _TIER_BY_TYPE: dict[str, str] = {
     # Auto-complete, but the host fences it behind a flag + a low-risk change-type allowlist and
     # auto-rolls-back on failed validation — it is never reachable without that explicit opt-in.
     "netops_auto_apply": REVIEW_RECOMMENDED,
+    # research_iterate is a local model call whose only side effect is MORE PLAN: every appended
+    # step is allowlist-validated and passes these same permission/approval gates itself, and the
+    # host bounds the loop (iteration budget) — so the checkpoint can auto-run; the risky steps it
+    # may add stop on their own merits.
+    "research_iterate": AUTO_SAFE,
 }
 
 _REASON_BY_TIER: dict[str, str] = {
@@ -106,6 +111,10 @@ _REASON_BY_TIER: dict[str, str] = {
 _REASON_BY_TYPE: dict[str, str] = {
     "web_search": (
         "Sends your query to an external web-search service — always asks first, even in Auto-complete."
+    ),
+    "research_iterate": (
+        "Reviews findings and may extend the plan; every added step still passes the permission "
+        "and approval gates."
     ),
 }
 
@@ -184,6 +193,8 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     # NetOps changes are writes (bounded, reversible, dry-run-planned — but still writes).
     "netops_apply": WRITE,
     "netops_auto_apply": WRITE,
+    # The research checkpoint is a structured model call; its plan extension is host-validated.
+    "research_iterate": MODEL,
 }
 
 # The grant key a step type requires before it may run. Only gated tools appear here; a type not in the

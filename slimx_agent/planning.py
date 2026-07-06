@@ -197,6 +197,9 @@ def build_planner_prompt(
     # tool/arguments) the plan schema cannot carry reliably — it enters plans via templates or
     # the API, and the executor honestly skips a bare planner-emitted one.
     _gated_out.add("mcp_call")
+    # research_iterate is advertised only for research-mode runs; this portable prompt has no
+    # mode, so it never advertises it (hosts pass a mode-aware advertised set instead).
+    _gated_out.add("research_iterate")
     # NetOps write steps are never advertised either: a device change must not be invented by the
     # planner. They enter via a template/API with structured params, hard-gated for approval.
     _gated_out |= {"netops_apply", "netops_auto_apply"}
@@ -330,3 +333,20 @@ def build_self_check_prompt(goal: str, result_text: str) -> str:
         "Never invent scope beyond the goal.\n\n"
         f"Goal: {goal}\n\nResult:\n{result_text}"
     )
+
+
+# --- Research checkpoint (deep-research loop, 0.9) -------------------------------------------
+# Defaulted dataclass for the structured verdict a research_iterate step produces: the ledger
+# update (findings / open questions / contradictions) plus the plan extension (next_steps, same
+# shape as plan steps). Defaults everywhere so weak local models construct; ``satisfied=True``
+# is the fail-safe — a malformed verdict records nothing and extends nothing.
+
+
+@dataclass
+class SlimXResearchCheck:
+    satisfied: bool = True
+    summary: str = ""
+    findings: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
+    next_steps: list[SlimXAgentPlanStep] = field(default_factory=list)
