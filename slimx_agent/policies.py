@@ -76,6 +76,8 @@ _TIER_BY_TYPE: dict[str, str] = {
     # stage_files only READS the repo (traversal-guarded) and writes into the run's own
     # sandbox — the hydration read of the discovery loop, safe to auto-run like code_read.
     "stage_files": AUTO_SAFE,
+    # review_patch is a model verdict over the staged diff — text only, auto-safe.
+    "review_patch": AUTO_SAFE,
     "apply_patch_sandbox": REVIEW_RECOMMENDED,
     "run_check": REVIEW_RECOMMENDED,
     "package_patch": AUTO_SAFE,
@@ -192,6 +194,7 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     # Code Builder: propose reads+generates (model); apply/check/package mutate or execute (write).
     "propose_patch": MODEL,
     "stage_files": READ,
+    "review_patch": MODEL,
     "apply_patch_sandbox": WRITE,
     "run_check": WRITE,
     "package_patch": WRITE,
@@ -225,6 +228,7 @@ _GRANT_BY_TYPE: dict[str, str] = {
     # (code_write). The Code Builder pack requires both grants.
     "propose_patch": "code_read",
     "stage_files": "code_read",
+    "review_patch": "code_read",
     "apply_patch_sandbox": "code_write",
     "run_check": "code_write",
     "package_patch": "code_write",

@@ -96,6 +96,11 @@ CODE_BUILD_STEP_TYPES: tuple[str, ...] = (
     # propose_patch) works without the user staging files by hand. Read-only against the real
     # repo, write-only into the per-run sandbox; gated by code_read + build mode.
     "stage_files",
+    # Patch review (0.12, production roadmap): a structured model verdict over the run's
+    # proposed diff — correctness, risk, tests needed, backwards compatibility, rollback notes
+    # — so "code this" hands the user a REVIEWED patch, not just a diff. Model text only
+    # (no mutation, no execution); gated by code_read + build mode.
+    "review_patch",
 )
 # Master-agent orchestration: ``spawn_run`` creates AND plans a child run (a "sub-agent") for
 # one focused sub-goal; ``join_runs`` executes the spawned children and collects their outcomes
