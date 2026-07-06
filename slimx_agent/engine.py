@@ -128,9 +128,17 @@ def execute_run_events(
         # even in Auto-complete while additive steps run without a manual click.
         policy = current.approval_policy if current is not None else run.approval_policy
         auto_approve = current.auto_approve if current is not None else run.auto_approve
+        # Scoped pre-approval (0.14): duck-typed run attribute, read fresh so a mid-run
+        # grant/revoke is honored on the very next step.
+        preapproved_tools = (
+            getattr(current if current is not None else run, "preapproved_tools", None) or ()
+        )
         if step.status in ("pending", "awaiting_approval"):
             classification, reason, stop = resolve_gate(
-                step, policy=policy, auto_approve=auto_approve
+                step,
+                policy=policy,
+                auto_approve=auto_approve,
+                preapproved_tools=preapproved_tools,
             )
             if stop:
                 if step.status == "pending":
@@ -138,13 +146,19 @@ def execute_run_events(
                 store.set_run_status(run, "awaiting_approval")
                 yield from drain()
                 return
-            # Not stopping: if the step was gated (planner-flagged or already awaiting),
-            # record the auto-approval that clears it — the trail shows WHY it proceeded.
-            if step.requires_approval or step.status == "awaiting_approval":
+            # Not stopping: if the step was gated (planner-flagged, already awaiting, or a
+            # hard gate cleared by scoped pre-approval), record the auto-approval that clears
+            # it — the trail shows WHY it proceeded.
+            preapproved_gate = (
+                classification == policies.HARD_GATED and step.type in preapproved_tools
+            )
+            if step.requires_approval or step.status == "awaiting_approval" or preapproved_gate:
                 store.set_step_state(step.id, "approved")
                 payload: dict[str, Any] = {"auto": True}
                 if policy is not None:
                     payload |= {"policy": policy, "classification": classification}
+                if preapproved_gate:
+                    payload["preapproved"] = True
                 store.append_event(
                     run.id, contracts.APPROVAL_GRANTED, step_id=step.id, payload=payload
                 )
@@ -223,17 +237,30 @@ def _budget_exhausted_reason(run: Any, steps: list[Any], drive_started: float) -
 
 
 def resolve_gate(
-    step: Any, *, policy: str | None, auto_approve: bool
+    step: Any,
+    *,
+    policy: str | None,
+    auto_approve: bool,
+    preapproved_tools: Any = None,
 ) -> tuple[str | None, str, bool]:
     """Decide whether execution stops at ``step``. Returns ``(classification, reason, stop)``.
 
     Legacy path (``policy is None``): only planner-flagged steps gate, and ``auto_approve``
     clears them — byte-for-byte the old behavior. Otherwise the deterministic classifier +
-    policy matrix in :mod:`slimx_agent.policies` decide."""
+    policy matrix in :mod:`slimx_agent.policies` decide. ``preapproved_tools`` (the run's
+    duck-typed scoped pre-authorization, 0.14) downgrades an allowlisted read-only hard gate
+    — membership in ``policies.PREAPPROVABLE_STEP_TYPES`` is enforced here, so a stored value
+    outside the allowlist can never clear a gate."""
     if policy is None:
         return None, "", bool(step.requires_approval) and not auto_approve
     classification, reason = policies.classify_step(step)
-    stop = policies.requires_stop(policy, classification, step.requires_approval)
+    preapproved = (
+        step.type in policies.PREAPPROVABLE_STEP_TYPES
+        and step.type in (preapproved_tools or ())
+    )
+    stop = policies.requires_stop(
+        policy, classification, step.requires_approval, preapproved=preapproved
+    )
     return classification, reason, stop
 
 

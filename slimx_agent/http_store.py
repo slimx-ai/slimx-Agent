@@ -29,6 +29,8 @@ class RunSnapshot:
     # so a pre-budget host wire shape behaves exactly as before.
     budget_max_steps: int | None = None
     budget_max_wall_seconds: int | None = None
+    # Scoped pre-approval (0.14). None/absent = nothing pre-authorized (pre-0.14 wire shape).
+    preapproved_tools: list[str] | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -41,6 +43,7 @@ class RunSnapshot:
             allowed_tools_json=data.get("allowed_tools_json"),
             budget_max_steps=_opt_int(data.get("budget_max_steps")),
             budget_max_wall_seconds=_opt_int(data.get("budget_max_wall_seconds")),
+            preapproved_tools=data.get("preapproved_tools"),
             raw=data,
         )
 

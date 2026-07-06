@@ -335,3 +335,64 @@ def test_research_iterate_classifies_auto_safe():
     assert tier == policies.AUTO_SAFE
     assert "extend the plan" in reason
     assert policies.required_grant("research_iterate") is None
+
+
+def test_preapproved_web_search_clears_the_hard_gate_with_an_audited_grant():
+    """Scoped pre-approval (0.14): a run whose duck-typed ``preapproved_tools`` names
+    web_search runs it WITHOUT parking, and the APPROVAL_GRANTED trail says why."""
+
+    @dataclass
+    class PreapprovedRun(FakeRun):
+        preapproved_tools: list[str] | None = None
+
+    run = PreapprovedRun(
+        "r", allowed_tools_json=["web_search"], preapproved_tools=["web_search"]
+    )
+    store = MemoryStore(run, [FakeStep("s1", "web_search"), FakeStep("s2", "model_call")])
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "completed"
+    assert [s.status for s in store.steps] == ["completed", "completed"]
+    assert contracts.APPROVAL_REQUIRED not in _types(store)
+    granted = next(e for e in store.events if e["type"] == contracts.APPROVAL_GRANTED)
+    assert granted["payload_json"]["preapproved"] is True
+    assert granted["payload_json"]["classification"] == "hard_gated"
+
+    # manual policy still stops — pre-approval only downgrades the HARD gate, it never
+    # overrides plan-review-first.
+    run2 = PreapprovedRun(
+        "r",
+        approval_policy="manual",
+        allowed_tools_json=["web_search"],
+        preapproved_tools=["web_search"],
+    )
+    store2 = MemoryStore(run2, [FakeStep("s1", "web_search")])
+    engine.execute_run(store2, _registry(), store2.run, profile=object())
+    assert store2.run.status == "awaiting_approval"
+
+
+def test_preapproval_allowlist_is_enforced_in_the_engine():
+    """A stored pre-approval outside PREAPPROVABLE_STEP_TYPES (e.g. mcp_call) can never
+    clear a hard gate — the engine checks membership itself, not just the host route."""
+    from slimx_agent import policies
+
+    assert "web_search" in policies.PREAPPROVABLE_STEP_TYPES
+    assert "mcp_call" not in policies.PREAPPROVABLE_STEP_TYPES
+
+    @dataclass
+    class PreapprovedRun(FakeRun):
+        preapproved_tools: list[str] | None = None
+
+    registry = ToolRegistry()
+    registry.register("mcp_call", lambda ctx, run, step, profile: {"ok": True})
+    run = PreapprovedRun(
+        "r", allowed_tools_json=["mcp_tools"], preapproved_tools=["mcp_call"]
+    )
+    store = MemoryStore(run, [FakeStep("s1", "mcp_call")])
+    engine.execute_run(store, registry, store.run, profile=object())
+    # Parked at the gate (or skipped by the permission gate) — never auto-run.
+    assert store.run.status != "completed" or store.steps[0].status != "completed"
+    assert not any(
+        (e["payload_json"] or {}).get("preapproved")
+        for e in store.events
+        if e["type"] == contracts.APPROVAL_GRANTED
+    )

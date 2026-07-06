@@ -250,6 +250,11 @@ RUN_JOINED = "agent.run.joined"
 # of truncating work silently).
 PLAN_EXTENDED = "agent.plan.extended"
 BUDGET_EXHAUSTED = "agent.run.budget_exhausted"
+# Scoped pre-approval (additive, 0.14): the user pre-authorized named READ-ONLY external step
+# types for the rest of this run ("approve all web research"), so those hard gates auto-clear
+# under auto_complete. Payload: the granted type list (possibly empty = revoked). The engine
+# stamps ``preapproved: true`` on the APPROVAL_GRANTED events it clears this way.
+APPROVAL_PREAUTHORIZED = "agent.approval.preauthorized"
 
 EVENT_TYPES: tuple[str, ...] = (
     RUN_CREATED,
@@ -276,4 +281,5 @@ EVENT_TYPES: tuple[str, ...] = (
     RUN_JOINED,
     PLAN_EXTENDED,
     BUDGET_EXHAUSTED,
+    APPROVAL_PREAUTHORIZED,
 )

@@ -140,16 +140,30 @@ def classify_step(step: Any) -> tuple[str, str]:
     return tier, reason
 
 
-def requires_stop(policy: str, classification: str, requires_approval: bool) -> bool:
+# Step types a user may pre-authorize for the rest of ONE run ("approve all web research"),
+# downgrading their per-call hard gate to review-recommended semantics. READ-ONLY external
+# steps only — write/commit steps (mcp_call, netops writes, plugin_tool) can NEVER be
+# pre-approved; the per-call gate is the product's L2+ safety line.
+PREAPPROVABLE_STEP_TYPES: frozenset[str] = frozenset({"web_search"})
+
+
+def requires_stop(
+    policy: str, classification: str, requires_approval: bool, *, preapproved: bool = False
+) -> bool:
     """Whether execution must stop at this step for the given policy.
 
-    * ``hard_gated`` always stops (safety checkpoint), regardless of policy.
+    * ``hard_gated`` always stops (safety checkpoint), regardless of policy — unless the user
+      pre-authorized this step type for the run (``preapproved``, allowlisted read-only types
+      only), which downgrades it to review-recommended semantics: it auto-runs under
+      ``auto_complete`` but still stops under ``review_checkpoints``/``manual``.
     * ``auto_complete`` — stops only for hard gates.
     * ``review_checkpoints`` — stops for review-recommended (or planner-flagged) steps.
     * ``manual`` — stops for anything reviewable or planner-flagged (most conservative).
     """
     if classification == HARD_GATED:
-        return True
+        if not preapproved:
+            return True
+        classification = REVIEW_RECOMMENDED
     if policy == "auto_complete":
         return False
     if policy == "review_checkpoints":
