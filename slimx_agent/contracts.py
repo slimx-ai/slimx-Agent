@@ -55,6 +55,11 @@ EVIDENCE_STEP_TYPES: tuple[str, ...] = ("project_inventory", "evidence_query", "
 # and classified ``review_recommended`` so they still stop for review under manual/review policies.
 # Never destructive: no deletes, no cross-project writes, no external egress.
 EVIDENCE_WRITE_STEP_TYPES: tuple[str, ...] = ("create_note", "add_tag")
+# Task WRITES: additive, reversible, in-project task creation — ``create_work_item`` turns a run
+# finding into a durable Work Item (task). GATED by the ``evidence_write`` grant (reused: it is the
+# same "save additive project state" opt-in as create_note/add_tag) and classified
+# ``review_recommended``. Never destructive: no deletes, no cross-workspace/project writes, no egress.
+TASK_STEP_TYPES: tuple[str, ...] = ("create_work_item",)
 BUILD_STEP_TYPES: tuple[str, ...] = (
     "write_file",
     "package_artifact",
@@ -98,6 +103,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     ASSISTED_STEP_TYPES
     + EVIDENCE_STEP_TYPES
     + EVIDENCE_WRITE_STEP_TYPES
+    + TASK_STEP_TYPES
     + EXTERNAL_STEP_TYPES
     + CODE_STEP_TYPES
     + BUILD_STEP_TYPES

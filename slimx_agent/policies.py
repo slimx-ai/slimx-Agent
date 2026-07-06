@@ -58,6 +58,8 @@ _TIER_BY_TYPE: dict[str, str] = {
     # but never a hard gate (local, reversible, no egress).
     "create_note": REVIEW_RECOMMENDED,
     "add_tag": REVIEW_RECOMMENDED,
+    # Task creation: additive/reversible project write, like create_note — a review point, never a gate.
+    "create_work_item": REVIEW_RECOMMENDED,
     # Build-agent steps touch a sandboxed per-run workspace; they self-skip outside build mode.
     "write_file": REVIEW_RECOMMENDED,
     "package_artifact": REVIEW_RECOMMENDED,
@@ -155,6 +157,7 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "document_read": READ,
     "create_note": PERSISTENT,
     "add_tag": WRITE,
+    "create_work_item": PERSISTENT,
     "write_file": WRITE,
     "package_artifact": WRITE,
     # Code Builder: propose reads+generates (model); apply/check/package mutate or execute (write).
@@ -191,6 +194,7 @@ _GRANT_BY_TYPE: dict[str, str] = {
     "join_runs": "spawn_agents",
     "create_note": "evidence_write",
     "add_tag": "evidence_write",
+    "create_work_item": "evidence_write",
     "netops_collect": "netops_read",
     "netops_apply": "netops_write",
     "netops_auto_apply": "netops_write",
