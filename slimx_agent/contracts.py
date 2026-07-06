@@ -91,6 +91,11 @@ CODE_BUILD_STEP_TYPES: tuple[str, ...] = (
     "apply_patch_sandbox",
     "run_check",
     "package_patch",
+    # Sandbox hydration (0.11): copy ALLOWLISTED files from the read-only code-scan root into
+    # the run's sandbox, so the discovery loop (code_search -> code_read -> stage_files ->
+    # propose_patch) works without the user staging files by hand. Read-only against the real
+    # repo, write-only into the per-run sandbox; gated by code_read + build mode.
+    "stage_files",
 )
 # Master-agent orchestration: ``spawn_run`` creates AND plans a child run (a "sub-agent") for
 # one focused sub-goal; ``join_runs`` executes the spawned children and collects their outcomes
