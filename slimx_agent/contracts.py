@@ -25,6 +25,11 @@ ASSISTED_STEP_TYPES: tuple[str, ...] = (
     "knowledge_retrieve",
     "attach_context",
     "create_synthesis",
+    # ``compose_report`` (0.15) — the long-form deliverable pipeline: one structured OUTLINE
+    # call, then one model call PER SECTION, assembled into a single multi-section report that
+    # persists as both a synthesis and a downloadable report artifact. Model-only work (same
+    # egress surface as create_synthesis); auto-safe.
+    "compose_report",
     "save_evidence",
 )
 # External tools reach the network via the one bounded MCP boundary (services/mcp_runtime).
@@ -35,7 +40,11 @@ ASSISTED_STEP_TYPES: tuple[str, ...] = (
 # (``mcp_tools``) + per-call hard-gate approval + the connector's own ``allowedTools``
 # allowlist (connectors permit nothing by default). Not advertised to the planner (structured
 # params required); it enters plans via templates or the API.
-EXTERNAL_STEP_TYPES: tuple[str, ...] = ("web_search", "mcp_call")
+# ``web_fetch`` (0.15) reads ONE public web page (host-guarded http/https GET, size/type
+# capped, HTML reduced to text) and saves it as a context source — the "actually read the
+# source" companion to web_search's result snippets. Read-only external egress: same grant as
+# web_search, hard-gated per call, and pre-approvable ("approve all web research").
+EXTERNAL_STEP_TYPES: tuple[str, ...] = ("web_search", "web_fetch", "mcp_call")
 # Read-only codebase tools, confined to ``AGENT_CODE_SCAN_ROOT`` (never executes code, never
 # edits; code EDIT/RUN are deliberately NOT provided — they would be arbitrary code execution,
 # which the product forbids). Gated by the ``code_read`` grant; self-skip without a scan root.
@@ -255,6 +264,9 @@ BUDGET_EXHAUSTED = "agent.run.budget_exhausted"
 # under auto_complete. Payload: the granted type list (possibly empty = revoked). The engine
 # stamps ``preapproved: true`` on the APPROVAL_GRANTED events it clears this way.
 APPROVAL_PREAUTHORIZED = "agent.approval.preauthorized"
+# compose_report progress (additive, 0.15): one event per drafted section (payload: index/
+# total/heading — never section text), so the UI can narrate long compositions honestly.
+REPORT_SECTION = "agent.report.section"
 
 EVENT_TYPES: tuple[str, ...] = (
     RUN_CREATED,
@@ -282,4 +294,5 @@ EVENT_TYPES: tuple[str, ...] = (
     PLAN_EXTENDED,
     BUDGET_EXHAUSTED,
     APPROVAL_PREAUTHORIZED,
+    REPORT_SECTION,
 )

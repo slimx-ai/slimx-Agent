@@ -49,7 +49,7 @@ def test_contracts_vocabulary_is_coherent():
     )
     assert "research_iterate" in ALLOWED_STEP_TYPES
     assert {"data_catalog", "data_query", "analyze_data"} <= set(ALLOWED_STEP_TYPES)
-    assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 25
+    assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 26
 
 
 def test_code_build_steps_are_a_graduated_patch_loop():
@@ -262,7 +262,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.14.0"
+    assert slimx_agent.__version__ == "0.15.0"
 
 
 def test_run_id_types_are_uuid_friendly():
@@ -300,3 +300,22 @@ def test_plugin_tool_is_hard_gated_behind_the_plugin_tools_grant():
     step = type("Step", (), {"type": "plugin_tool", "requires_approval": False})()
     tier, _reason = policies.classify_step(step)
     assert tier == policies.HARD_GATED  # every invocation stops for the user
+
+
+def test_web_fetch_and_compose_report_vocabulary():
+    """0.15: web_fetch = read-only external (web_search grant, hard-gated, pre-approvable);
+    compose_report = auto-safe model-only deliverable work."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import ALLOWED_STEP_TYPES
+
+    assert "web_fetch" in ALLOWED_STEP_TYPES and "compose_report" in ALLOWED_STEP_TYPES
+
+    def tier(step_type: str) -> str:
+        step = type("Step", (), {"type": step_type, "requires_approval": False})()
+        return policies.classify_step(step)[0]
+
+    assert tier("web_fetch") == policies.HARD_GATED
+    assert tier("compose_report") == policies.AUTO_SAFE
+    assert "web_fetch" in policies.PREAPPROVABLE_STEP_TYPES
+    assert policies.required_grant("web_fetch") == "web_search"
+    assert policies.required_grant("compose_report") is None

@@ -41,6 +41,9 @@ _TIER_BY_TYPE: dict[str, str] = {
     # web_search leaves the machine (external MCP egress). Hard-gated so each external send stops for
     # the user even in Auto-complete — the grant makes it *available*, this makes each use *confirmed*.
     "web_search": HARD_GATED,
+    # web_fetch reads one public page — the same read-the-web consent as web_search: external
+    # egress, so hard-gated per call (and pre-approvable below).
+    "web_fetch": HARD_GATED,
     # mcp_call invokes an arbitrary (possibly write-capable) connector tool — every call is a
     # safety checkpoint, on top of the mcp_tools grant and the connector's allowedTools list.
     "mcp_call": HARD_GATED,
@@ -109,6 +112,9 @@ _TIER_BY_TYPE: dict[str, str] = {
     # host bounds the loop (iteration budget) — so the checkpoint can auto-run; the risky steps it
     # may add stop on their own merits.
     "research_iterate": AUTO_SAFE,
+    # The long-form deliverable composer: outline + per-section model calls, no side effects
+    # beyond the synthesis/artifact it persists — additive, like create_synthesis.
+    "compose_report": AUTO_SAFE,
 }
 
 _REASON_BY_TIER: dict[str, str] = {
@@ -123,6 +129,10 @@ _REASON_BY_TIER: dict[str, str] = {
 _REASON_BY_TYPE: dict[str, str] = {
     "web_search": (
         "Sends your query to an external web-search service — always asks first, even in Auto-complete."
+    ),
+    "web_fetch": (
+        "Fetches one public web page (read-only) — always asks first, even in Auto-complete, "
+        "unless you pre-approved web research for this run."
     ),
     "research_iterate": (
         "Reviews findings and may extend the plan; every added step still passes the permission "
@@ -144,7 +154,7 @@ def classify_step(step: Any) -> tuple[str, str]:
 # downgrading their per-call hard gate to review-recommended semantics. READ-ONLY external
 # steps only — write/commit steps (mcp_call, netops writes, plugin_tool) can NEVER be
 # pre-approved; the per-call gate is the product's L2+ safety line.
-PREAPPROVABLE_STEP_TYPES: frozenset[str] = frozenset({"web_search"})
+PREAPPROVABLE_STEP_TYPES: frozenset[str] = frozenset({"web_search", "web_fetch"})
 
 
 def requires_stop(
@@ -190,6 +200,7 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "attach_context": READ,
     "save_evidence": PERSISTENT,
     "web_search": EXTERNAL,
+    "web_fetch": EXTERNAL,
     "mcp_call": EXTERNAL,
     "plugin_tool": EXTERNAL,
     "code_search": READ,
@@ -234,6 +245,8 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
 # read-only code steps share the ``code_read`` grant.
 _GRANT_BY_TYPE: dict[str, str] = {
     "web_search": "web_search",
+    # Same "read the public web" consent — one grant covers search + fetch.
+    "web_fetch": "web_search",
     "mcp_call": "mcp_tools",
     "plugin_tool": "plugin_tools",
     "code_search": "code_read",
