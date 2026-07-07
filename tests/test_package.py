@@ -49,7 +49,7 @@ def test_contracts_vocabulary_is_coherent():
     )
     assert "research_iterate" in ALLOWED_STEP_TYPES
     assert {"data_catalog", "data_query", "analyze_data"} <= set(ALLOWED_STEP_TYPES)
-    assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 26
+    assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 28
 
 
 def test_code_build_steps_are_a_graduated_patch_loop():
@@ -262,7 +262,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.15.0"
+    assert slimx_agent.__version__ == "0.16.0"
 
 
 def test_run_id_types_are_uuid_friendly():

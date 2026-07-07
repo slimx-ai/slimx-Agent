@@ -267,6 +267,12 @@ APPROVAL_PREAUTHORIZED = "agent.approval.preauthorized"
 # compose_report progress (additive, 0.15): one event per drafted section (payload: index/
 # total/heading — never section text), so the UI can narrate long compositions honestly.
 REPORT_SECTION = "agent.report.section"
+# Detached execution (additive, 0.16): a run was ENQUEUED for the host's background worker
+# (execution no longer tied to the client's connection), and a stale in-flight job was
+# RECLAIMED by the reaper (interrupted step reset + requeued, or failed honestly after the
+# attempt budget). Payloads carry job id/attempt counts only.
+RUN_ENQUEUED = "agent.run.enqueued"
+RUN_RECLAIMED = "agent.run.reclaimed"
 
 EVENT_TYPES: tuple[str, ...] = (
     RUN_CREATED,
@@ -295,4 +301,6 @@ EVENT_TYPES: tuple[str, ...] = (
     BUDGET_EXHAUSTED,
     APPROVAL_PREAUTHORIZED,
     REPORT_SECTION,
+    RUN_ENQUEUED,
+    RUN_RECLAIMED,
 )
