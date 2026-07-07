@@ -155,6 +155,22 @@ def test_evidence_step_types_are_ungated_auto_safe_reads():
         assert policies.required_grant(step_type) is None
 
 
+def test_task_read_step_type_is_ungated_auto_safe():
+    """0.17.0: work_items_read — the task-layer sibling of the project-evidence reads: local,
+    bounded, read-only over the project's own tasks, so no grant and auto-safe."""
+    from slimx_agent import policies
+    from slimx_agent.contracts import TASK_READ_STEP_TYPES
+
+    assert TASK_READ_STEP_TYPES == ("work_items_read",)
+    for step_type in TASK_READ_STEP_TYPES:
+        assert step_type in ALLOWED_STEP_TYPES
+        step = type("Step", (), {"type": step_type, "requires_approval": False})()
+        tier, _reason = policies.classify_step(step)
+        assert tier == policies.AUTO_SAFE
+        assert policies.CAPABILITY_BY_TYPE[step_type] == policies.READ
+        assert policies.required_grant(step_type) is None
+
+
 def test_evidence_write_step_types_are_grant_gated_review_recommended():
     """Project-evidence writes: allowed, review-recommended (not hard-gated), and gated behind the
     ``evidence_write`` grant so the agent never mutates evidence unless the user opted in."""

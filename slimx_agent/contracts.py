@@ -79,6 +79,12 @@ EVIDENCE_WRITE_STEP_TYPES: tuple[str, ...] = ("create_note", "add_tag")
 # classified ``review_recommended``. Never destructive: no deletes, no cross-workspace/project
 # writes, no egress.
 TASK_STEP_TYPES: tuple[str, ...] = ("create_work_item", "link_work_item")
+# Task READ: ``work_items_read`` lists/reads the active project's own Work Items (tasks),
+# including the tasks dispatched to the current run — so a run asked to "address my tasks" can
+# see them. Local query only, no egress, no write beyond the visible context source it saves —
+# so it needs no grant and is auto-safe, exactly like the project-evidence reads above. It
+# self-skips honestly when the run has no project scope or no tasks match.
+TASK_READ_STEP_TYPES: tuple[str, ...] = ("work_items_read",)
 # Knowledge WRITES: ``promote_to_knowledge`` promotes a synthesis this run produced into the
 # project Knowledge Base (curated trust; optionally as a decision). Additive and reversible in the
 # knowledge UI, GATED by the same ``evidence_write`` opt-in, classified ``review_recommended``.
@@ -163,6 +169,7 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + EVIDENCE_STEP_TYPES
     + EVIDENCE_WRITE_STEP_TYPES
     + TASK_STEP_TYPES
+    + TASK_READ_STEP_TYPES
     + KNOWLEDGE_WRITE_STEP_TYPES
     + EXTERNAL_STEP_TYPES
     + CODE_STEP_TYPES

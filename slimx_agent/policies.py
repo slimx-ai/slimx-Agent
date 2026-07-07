@@ -67,6 +67,8 @@ _TIER_BY_TYPE: dict[str, str] = {
     # Task creation: additive/reversible project write, like create_note — a review point, never a gate.
     "create_work_item": REVIEW_RECOMMENDED,
     "link_work_item": REVIEW_RECOMMENDED,
+    # Task read: local, bounded query over the project's own tasks — additive like evidence_query.
+    "work_items_read": AUTO_SAFE,
     # Knowledge promotion: additive/reversible curation of the project Knowledge Base.
     "promote_to_knowledge": REVIEW_RECOMMENDED,
     # Build-agent steps touch a sandboxed per-run workspace; they self-skip outside build mode.
@@ -213,6 +215,7 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "add_tag": WRITE,
     "create_work_item": PERSISTENT,
     "link_work_item": WRITE,
+    "work_items_read": READ,
     "promote_to_knowledge": PERSISTENT,
     "write_file": WRITE,
     "package_artifact": WRITE,
