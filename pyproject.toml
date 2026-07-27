@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.17.0"
 description = "SlimX-Agent: portable agent contracts, tool registry, runtime protocol, and planning schemas for the SlimX platform."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "SlimX AI" }]
 dependencies = [
     "pydantic>=2.7",

@@ -50,3 +50,7 @@ pip install -e '.[dev]'
 ruff check .
 pytest
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
