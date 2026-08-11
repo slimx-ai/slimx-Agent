@@ -34,7 +34,7 @@ class RunSnapshot:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_wire(cls, data: dict[str, Any]) -> "RunSnapshot":
+    def from_wire(cls, data: dict[str, Any]) -> RunSnapshot:
         return cls(
             id=str(data["id"]),
             status=str(data["status"]),
@@ -67,7 +67,7 @@ class StepSnapshot:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_wire(cls, data: dict[str, Any]) -> "StepSnapshot":
+    def from_wire(cls, data: dict[str, Any]) -> StepSnapshot:
         return cls(
             id=str(data["id"]),
             type=str(data["type"]),

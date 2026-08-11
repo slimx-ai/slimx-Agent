@@ -21,8 +21,7 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from slimx_agent import contracts
-from slimx_agent import policies
+from slimx_agent import contracts, policies
 from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
 
 # Run statuses a run cannot transition out of.
@@ -202,7 +201,7 @@ def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile
         return _skip_step(store, run, step_id, step.type, str(exc))
     except StepExecutionError as exc:
         return _fail_step(store, run, step_id, step.type, str(exc))
-    except Exception as exc:  # underlying service blew up — fail the step, not the request
+    except Exception as exc:  # noqa: BLE001 — service bugs fail the step, not the request
         store.rollback()
         return _fail_step(store, run, step_id, step.type, _short_error(exc))
 
@@ -254,9 +253,8 @@ def resolve_gate(
     if policy is None:
         return None, "", bool(step.requires_approval) and not auto_approve
     classification, reason = policies.classify_step(step)
-    preapproved = (
-        step.type in policies.PREAPPROVABLE_STEP_TYPES
-        and step.type in (preapproved_tools or ())
+    preapproved = step.type in policies.PREAPPROVABLE_STEP_TYPES and step.type in (
+        preapproved_tools or ()
     )
     stop = policies.requires_stop(
         policy, classification, step.requires_approval, preapproved=preapproved

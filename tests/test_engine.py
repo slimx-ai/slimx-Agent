@@ -345,9 +345,7 @@ def test_preapproved_web_search_clears_the_hard_gate_with_an_audited_grant():
     class PreapprovedRun(FakeRun):
         preapproved_tools: list[str] | None = None
 
-    run = PreapprovedRun(
-        "r", allowed_tools_json=["web_search"], preapproved_tools=["web_search"]
-    )
+    run = PreapprovedRun("r", allowed_tools_json=["web_search"], preapproved_tools=["web_search"])
     store = MemoryStore(run, [FakeStep("s1", "web_search"), FakeStep("s2", "model_call")])
     engine.execute_run(store, _registry(), store.run, profile=object())
     assert store.run.status == "completed"
@@ -384,9 +382,7 @@ def test_preapproval_allowlist_is_enforced_in_the_engine():
 
     registry = ToolRegistry()
     registry.register("mcp_call", lambda ctx, run, step, profile: {"ok": True})
-    run = PreapprovedRun(
-        "r", allowed_tools_json=["mcp_tools"], preapproved_tools=["mcp_call"]
-    )
+    run = PreapprovedRun("r", allowed_tools_json=["mcp_tools"], preapproved_tools=["mcp_call"])
     store = MemoryStore(run, [FakeStep("s1", "mcp_call")])
     engine.execute_run(store, registry, store.run, profile=object())
     # Parked at the gate (or skipped by the permission gate) — never auto-run.

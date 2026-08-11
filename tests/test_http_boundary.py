@@ -7,10 +7,13 @@ serialization, UNSET presence flags, and outcome envelopes are all exercised end
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
+import threading
+import uuid
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from slimx_agent import contracts, engine
@@ -30,6 +33,9 @@ class FakeHost:
         self.behaviors: dict[str, dict[str, Any]] = {}
         self.run_end_calls: list[tuple[str, str]] = []
         self.invoked_profiles: list[dict[str, Any]] = []
+        self.callback_requests: list[tuple[str, dict[str, str]]] = []
+        self._callback_lock = threading.Lock()
+        self.invoke_barrier: threading.Barrier | None = None
 
     def add_run(self, run_id: str, **overrides: Any) -> dict[str, Any]:
         run = {
@@ -64,6 +70,18 @@ class FakeHost:
     def app(self) -> FastAPI:
         api = FastAPI()
         host = self
+
+        @api.middleware("http")
+        async def record_callback(request: Request, call_next):
+            if request.url.path.startswith("/internal/agent-host/"):
+                with host._callback_lock:
+                    host.callback_requests.append(
+                        (
+                            request.url.path,
+                            {key.lower(): value for key, value in request.headers.items()},
+                        )
+                    )
+            return await call_next(request)
 
         @api.get("/internal/agent-host/runs/{run_id}")
         def get_run(run_id: str) -> dict:
@@ -123,6 +141,8 @@ class FakeHost:
 
         @api.post("/internal/agent-host/runs/{run_id}/steps/{step_id}/invoke")
         def invoke(run_id: str, step_id: str, body: dict) -> dict:
+            if host.invoke_barrier is not None:
+                host.invoke_barrier.wait(timeout=10)
             host.invoked_profiles.append(body["profile"])
             step = host.steps[step_id]
             return host.behaviors.get(step["type"], {"outcome": "completed", "output_refs": None})
@@ -139,6 +159,30 @@ class FakeHost:
 
 
 PROFILE = type("P", (), {"provider": "ollama", "model": "llama3.2", "base_url": None})()
+
+
+def _execution_body(seed: int = 1) -> dict[str, Any]:
+    return {
+        "provider": "ollama",
+        "model": "llama3.2",
+        "base_url": None,
+        "lease_job_id": str(uuid.UUID(int=seed)),
+        "lease_token": str(uuid.UUID(int=seed + 10_000)),
+        "lease_generation": seed,
+    }
+
+
+def _expected_attempt_headers(body: dict[str, Any]) -> dict[str, str]:
+    return {
+        "x-slimx-agent-lease-job-id": body["lease_job_id"],
+        "x-slimx-agent-lease-token": body["lease_token"],
+        "x-slimx-agent-lease-generation": str(body["lease_generation"]),
+    }
+
+
+def _assert_attempt_headers(headers: dict[str, str], body: dict[str, Any]) -> None:
+    for key, value in _expected_attempt_headers(body).items():
+        assert headers[key] == value
 
 
 def _drive(host: FakeHost, run_id: str):
@@ -258,20 +302,97 @@ def test_service_app_executes_and_reports_health(monkeypatch):
     host.add_run("r1")
     host.add_step("r1", "s1", "model_call")
     monkeypatch.delenv("SLIMX_AGENT_INTERNAL_TOKEN", raising=False)
-    service = TestClient(create_app(host_client=HostClient(client=TestClient(host.app()))))
+    host_transport = TestClient(host.app())
+    service = TestClient(create_app(host_client=HostClient(client=host_transport)))
 
     health = service.get("/health").json()
     assert health["mode"] == "standalone"
     assert health["auth_enabled"] is False
 
-    body = {"provider": "ollama", "model": "llama3.2", "base_url": None}
+    body = _execution_body()
     done = service.post("/agent/runs/r1/execute", json=body)
     assert done.status_code == 200
     assert done.json() == {"run_id": "r1", "status": "completed"}
     assert host.steps["s1"]["status"] == "completed"
     assert host.run_end_calls == [("r1", "completed")]
 
+    # The attempt fence is present at every callback category, including the final tool edge.
+    paths = [path for path, _headers in host.callback_requests]
+    assert any(path.endswith("/steps/s1/state") for path in paths)
+    assert any(path.endswith("/events") for path in paths)
+    assert any(path.endswith("/steps/s1/invoke") for path in paths)
+    assert any(path.endswith("/run-end") for path in paths)
+    for _path, headers in host.callback_requests:
+        _assert_attempt_headers(headers, body)
+    # Deriving the execution client never installs lease authority on the shared transport.
+    for key in _expected_attempt_headers(body):
+        assert key not in {header.lower() for header in host_transport.headers}
+
     assert service.post("/agent/runs/nope/execute", json=body).status_code == 404
+
+
+def test_service_execute_requires_a_complete_attempt_before_any_callback(monkeypatch):
+    from slimx_agent.service import create_app
+
+    host = FakeHost()
+    host.add_run("r1")
+    monkeypatch.delenv("SLIMX_AGENT_INTERNAL_TOKEN", raising=False)
+    service = TestClient(create_app(host_client=HostClient(client=TestClient(host.app()))))
+
+    profile_only = {"provider": "ollama", "model": "llama3.2", "base_url": None}
+    missing = service.post("/agent/runs/r1/execute", json=profile_only)
+    assert missing.status_code == 422
+    assert missing.json()["detail"] == "Agent execution lease is required"
+
+    partial = service.post(
+        "/agent/runs/r1/execute",
+        json={**profile_only, "lease_job_id": str(uuid.UUID(int=1))},
+    )
+    assert partial.status_code == 422
+    assert "Incomplete agent execution lease" in str(partial.json()["detail"])
+
+    stream_missing = service.post("/agent/runs/r1/execute/stream", json=profile_only)
+    assert stream_missing.status_code == 422
+    assert host.callback_requests == []
+
+
+def test_concurrent_service_executions_keep_attempt_headers_isolated(monkeypatch):
+    from slimx_agent.service import create_app
+
+    host = FakeHost()
+    host.add_run("r1")
+    host.add_step("r1", "step-r1", "model_call")
+    host.add_run("r2")
+    host.add_step("r2", "step-r2", "model_call")
+    # Force both executions to overlap at the tool edge. A shared-header implementation
+    # would make at least one run's later state/event/run-end callbacks carry the other lease.
+    host.invoke_barrier = threading.Barrier(2)
+    monkeypatch.delenv("SLIMX_AGENT_INTERNAL_TOKEN", raising=False)
+    shared_transport = TestClient(host.app())
+    service = TestClient(create_app(host_client=HostClient(client=shared_transport)))
+    bodies = {"r1": _execution_body(101), "r2": _execution_body(202)}
+
+    def execute(run_id: str):
+        return service.post(f"/agent/runs/{run_id}/execute", json=bodies[run_id])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(execute, ("r1", "r2")))
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert [response.json()["status"] for response in responses] == ["completed", "completed"]
+    assert any(path.endswith("/steps/step-r1/invoke") for path, _ in host.callback_requests)
+    assert any(path.endswith("/steps/step-r2/invoke") for path, _ in host.callback_requests)
+
+    for path, headers in host.callback_requests:
+        if "/runs/r1" in path or "/steps/step-r1" in path:
+            _assert_attempt_headers(headers, bodies["r1"])
+        elif "/runs/r2" in path or "/steps/step-r2" in path:
+            _assert_attempt_headers(headers, bodies["r2"])
+        else:  # Every callback in this test must be attributable to exactly one run.
+            raise AssertionError(f"unexpected callback path {path}")
+
+    for key in _expected_attempt_headers(bodies["r1"]):
+        assert key not in {header.lower() for header in shared_transport.headers}
 
 
 def test_service_app_enforces_internal_token(monkeypatch):
@@ -282,7 +403,7 @@ def test_service_app_enforces_internal_token(monkeypatch):
     monkeypatch.setenv("SLIMX_AGENT_INTERNAL_TOKEN", "sekrit")
     service = TestClient(create_app(host_client=HostClient(client=TestClient(host.app()))))
 
-    body = {"provider": "ollama", "model": "llama3.2", "base_url": None}
+    body = _execution_body()
     assert service.post("/agent/runs/r1/execute", json=body).status_code == 401
     ok = service.post(
         "/agent/runs/r1/execute", json=body, headers={"Authorization": "Bearer sekrit"}
@@ -300,7 +421,7 @@ def test_service_stream_emits_sse_data_lines(monkeypatch):
     monkeypatch.delenv("SLIMX_AGENT_INTERNAL_TOKEN", raising=False)
     service = TestClient(create_app(host_client=HostClient(client=TestClient(host.app()))))
 
-    body = {"provider": "ollama", "model": "llama3.2", "base_url": None}
+    body = _execution_body()
     payloads = []
     with service.stream("POST", "/agent/runs/r1/execute/stream", json=body) as response:
         assert response.status_code == 200

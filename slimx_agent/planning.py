@@ -73,7 +73,7 @@ class AgentPlanStep(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _model_steps_need_an_instruction(self) -> "AgentPlanStep":
+    def _model_steps_need_an_instruction(self) -> AgentPlanStep:
         # model_call / compare_models execute the instruction AS the prompt — an empty one is
         # guaranteed to fail at run time ("model_call requires an instruction"), so reject it
         # at plan time where the retry-with-feedback loop can get the model to fill it in.

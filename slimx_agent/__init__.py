@@ -20,14 +20,26 @@ that); ``planning`` additionally needs pydantic.
 
 from slimx_agent.contracts import (
     AGENT_MODES as AGENT_MODES,
+)
+from slimx_agent.contracts import (
     ALLOWED_STEP_TYPES as ALLOWED_STEP_TYPES,
+)
+from slimx_agent.contracts import (
     APPROVAL_POLICIES as APPROVAL_POLICIES,
+)
+from slimx_agent.contracts import (
     EVENT_TYPES as EVENT_TYPES,
+)
+from slimx_agent.contracts import (
     GRANTABLE_TOOLS as GRANTABLE_TOOLS,
 )
 from slimx_agent.runtime import (
     AgentRunConflict as AgentRunConflict,
+)
+from slimx_agent.runtime import (
     AgentRuntime as AgentRuntime,
+)
+from slimx_agent.runtime import (
     RunProfile as RunProfile,
 )
 from slimx_agent.store import (
@@ -35,9 +47,15 @@ from slimx_agent.store import (
 )
 from slimx_agent.tools import (
     AgentRunContext as AgentRunContext,
+)
+from slimx_agent.tools import (
     StepExecutionError as StepExecutionError,
+)
+from slimx_agent.tools import (
     StepNotApplicable as StepNotApplicable,
+)
+from slimx_agent.tools import (
     ToolRegistry as ToolRegistry,
 )
 
-__version__ = "0.16.0"
+__version__ = "0.18.0"

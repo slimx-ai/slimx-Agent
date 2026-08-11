@@ -44,9 +44,14 @@ def test_contracts_vocabulary_is_coherent():
     }
     assert "netops_collect" in ALLOWED_STEP_TYPES
     assert {"netops_apply", "netops_auto_apply"} <= set(ALLOWED_STEP_TYPES)
-    assert {"propose_patch", "apply_patch_sandbox", "run_check", "package_patch", "stage_files", "review_patch"} <= set(
-        ALLOWED_STEP_TYPES
-    )
+    assert {
+        "propose_patch",
+        "apply_patch_sandbox",
+        "run_check",
+        "package_patch",
+        "stage_files",
+        "review_patch",
+    } <= set(ALLOWED_STEP_TYPES)
     assert "research_iterate" in ALLOWED_STEP_TYPES
     assert {"data_catalog", "data_query", "analyze_data"} <= set(ALLOWED_STEP_TYPES)
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 28
@@ -278,7 +283,7 @@ def test_runtime_protocol_shape():
 
 
 def test_version():
-    assert slimx_agent.__version__ == "0.16.0"
+    assert slimx_agent.__version__ == "0.18.0"
 
 
 def test_run_id_types_are_uuid_friendly():

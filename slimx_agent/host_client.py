@@ -16,6 +16,7 @@ without the ``service`` extra installed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from slimx_agent.runtime import RunProfile
@@ -28,6 +29,37 @@ STORE_TIMEOUT_SECONDS = 60.0
 INVOKE_TIMEOUT_SECONDS = 3600.0
 
 _BASE_PATH = "/internal/agent-host"
+
+# An execution attempt is host authority, not ambient service state.  Keep the values on
+# every callback request so the host can reject a stale worker at each persistence/tool edge.
+# These names are part of the standalone host wire contract; see docs/service-contract.md.
+LEASE_JOB_ID_HEADER = "X-SlimX-Agent-Lease-Job-Id"
+LEASE_TOKEN_HEADER = "X-SlimX-Agent-Lease-Token"
+LEASE_GENERATION_HEADER = "X-SlimX-Agent-Lease-Generation"
+
+
+@dataclass(frozen=True)
+class ExecutionAttempt:
+    """The host-issued lease identifying exactly one standalone execution attempt."""
+
+    job_id: str
+    token: str
+    generation: int
+
+    def __post_init__(self) -> None:
+        if not self.job_id.strip():
+            raise ValueError("Execution attempt job id must not be empty")
+        if not self.token.strip():
+            raise ValueError("Execution attempt token must not be empty")
+        if isinstance(self.generation, bool) or self.generation < 0:
+            raise ValueError("Execution attempt generation must be a non-negative integer")
+
+    def headers(self) -> dict[str, str]:
+        return {
+            LEASE_JOB_ID_HEADER: self.job_id,
+            LEASE_TOKEN_HEADER: self.token,
+            LEASE_GENERATION_HEADER: str(self.generation),
+        }
 
 
 class HostError(RuntimeError):
@@ -58,13 +90,15 @@ class HostClient:
         token: str | None = None,
         client: Any | None = None,
     ) -> None:
+        # Request headers are owned by this wrapper, never installed on a shared client.  A
+        # per-execution wrapper can therefore share the connection pool without one run's
+        # lease becoming another concurrent run's ambient default.
+        self._request_headers = {"Authorization": f"Bearer {token}"} if token else {}
         if client is not None:
             # An injected httpx-compatible client (tests use the host app's TestClient),
             # which owns its own timeout policy — per-request timeouts are skipped for it.
             self._client = client
             self._per_request_timeouts = False
-            if token:
-                self._client.headers["Authorization"] = f"Bearer {token}"
             return
         if not base_url:
             raise ValueError("HostClient needs a base_url (SLIMX_AGENT_HOST_URL) or a client")
@@ -72,10 +106,22 @@ class HostClient:
 
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {token}"} if token else {},
             timeout=httpx.Timeout(STORE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
         )
         self._per_request_timeouts = True
+
+    def for_execution(self, attempt: ExecutionAttempt) -> HostClient:
+        """Return an attempt-bound wrapper over this client's transport/connection pool.
+
+        The base client and the injected/shared HTTP client's default headers are untouched.
+        Attempt headers are copied into the derived wrapper and then supplied explicitly on
+        every request, which keeps concurrent executions isolated.
+        """
+        derived = object.__new__(HostClient)
+        derived._client = self._client
+        derived._per_request_timeouts = self._per_request_timeouts
+        derived._request_headers = {**self._request_headers, **attempt.headers()}
+        return derived
 
     # --- plumbing -----------------------------------------------------------------
 
@@ -96,6 +142,10 @@ class HostClient:
             kwargs["params"] = params
         if timeout is not None and self._per_request_timeouts:
             kwargs["timeout"] = timeout
+        if self._request_headers:
+            # Pass a fresh mapping so neither httpx nor an injected test/client adapter can
+            # mutate the wrapper's immutable-by-convention request context.
+            kwargs["headers"] = dict(self._request_headers)
         response = self._client.request(method, f"{_BASE_PATH}{path}", **kwargs)
         if response.status_code == 404 and allow_404:
             return None
