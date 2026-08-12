@@ -41,9 +41,9 @@ class StepNotApplicable(Exception):
 class StepActionPrepared(Exception):
     """The host durably prepared a new action generation instead of executing the target.
 
-    This is a control-plane outcome, not a failure or a skip. The engine must re-read the
-    authoritative run and step, then apply the approval policy to that new generation without
-    emitting a terminal step event for the preparation pass.
+    This is a control-plane outcome, not a failure or a skip. The engine re-reads the
+    authoritative run and step and stops at that prepared generation without emitting a terminal
+    step event. A later drive applies the approval policy to the new action.
     """
 
 

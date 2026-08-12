@@ -169,6 +169,11 @@ def execute_run_events(
 
         ran = run_step(store, registry, run, step, profile=profile)
         yield from drain()
+        if ran.status == "awaiting_approval":
+            # A host-side two-stage action prepared a new generation while this handler was
+            # admitted. End this drive at the durable review boundary. A later drive re-reads the
+            # new action and applies normal manual/automatic policy, matching in-process parity.
+            return
         if ran.status == "failed":
             store.append_event(run.id, contracts.RUN_FAILED, step_id=ran.id, commit=False)
             store.set_run_status(run, "failed")

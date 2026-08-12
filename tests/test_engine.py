@@ -206,10 +206,10 @@ def test_not_applicable_skips_and_the_run_continues():
     assert store.steps[0].status == "skipped"
 
 
-def test_prepared_action_is_re_read_and_policy_applies_to_the_new_generation():
+def test_prepared_action_stops_cleanly_and_next_drive_applies_policy():
     calls = 0
     store = MemoryStore(
-        FakeRun("r", approval_policy="manual_review"),
+        FakeRun("r", approval_policy="auto_complete"),
         [FakeStep("s1", "model_call", status="approved", requires_approval=True)],
     )
 
@@ -217,6 +217,7 @@ def test_prepared_action_is_re_read_and_policy_applies_to_the_new_generation():
         nonlocal calls
         calls += 1
         step.status = "awaiting_approval"
+        step.requires_approval = False
         store.run.status = "awaiting_approval"
         raise StepActionPrepared("candidate ready")
 
@@ -229,6 +230,12 @@ def test_prepared_action_is_re_read_and_policy_applies_to_the_new_generation():
     assert contracts.STEP_FAILED not in _types(store)
     assert contracts.STEP_SKIPPED not in _types(store)
     assert contracts.APPROVAL_GRANTED not in _types(store)
+
+    store.set_run_status(store.run, "planned")
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "completed"
+    assert store.steps[0].status == "completed"
+    assert contracts.APPROVAL_GRANTED in _types(store)
 
 
 def test_cancel_during_the_last_step_is_not_overwritten_by_completion():
