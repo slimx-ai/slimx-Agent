@@ -3,9 +3,9 @@
 The standalone service owns the LOOP (gates, ordering, transitions, events); the host owns
 the TOOLS (they need the host's database, capability services, model transport, and egress
 policy). One generic handler per contract step type turns the host's invocation-outcome
-envelope back into the engine's native vocabulary — ``StepNotApplicable`` for an honest
-skip, ``StepExecutionError`` for a failure — so the engine applies exactly the same
-transitions it would in-process.
+envelope back into the engine's native vocabulary — ``StepNotApplicable`` for an honest skip,
+``StepActionPrepared`` for a newly persisted action generation, and ``StepExecutionError`` for
+a failure — so the engine applies exactly the same transitions it would in-process.
 """
 
 from __future__ import annotations
@@ -14,7 +14,12 @@ from typing import Any
 
 from slimx_agent import contracts
 from slimx_agent.host_client import HostClient
-from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
+from slimx_agent.tools import (
+    StepActionPrepared,
+    StepExecutionError,
+    StepNotApplicable,
+    ToolRegistry,
+)
 
 
 def _remote_handler(client: HostClient, run: Any, step: Any, profile: Any) -> dict[str, Any] | None:
@@ -25,6 +30,10 @@ def _remote_handler(client: HostClient, run: Any, step: Any, profile: Any) -> di
         return refs if isinstance(refs, dict) else None
     if outcome == "skipped":
         raise StepNotApplicable(str(result.get("reason") or "step not applicable"))
+    if outcome == "prepared":
+        raise StepActionPrepared(
+            str(result.get("reason") or "a new action generation was prepared")
+        )
     raise StepExecutionError(str(result.get("error") or "step failed on the host"))
 
 

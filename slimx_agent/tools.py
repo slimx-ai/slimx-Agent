@@ -2,7 +2,8 @@
 
 The explicit boundary between the agent engine and the host's capabilities:
 
-- **Step errors** — the two outcomes a tool handler may signal besides success. Moved here
+- **Step outcomes** — failure, not-applicable, and durable preparation signals besides success.
+  Moved here
   from ``executor_service`` (which re-exports them) because they are the engine's vocabulary,
   not an implementation detail.
 - **ToolHandler / ToolRegistry** — the executor dispatches step types ONLY through a registry
@@ -37,6 +38,15 @@ class StepNotApplicable(Exception):
     """
 
 
+class StepActionPrepared(Exception):
+    """The host durably prepared a new action generation instead of executing the target.
+
+    This is a control-plane outcome, not a failure or a skip. The engine must re-read the
+    authoritative run and step, then apply the approval policy to that new generation without
+    emitting a terminal step event for the preparation pass.
+    """
+
+
 @dataclass
 class AgentRunContext:
     """The context that grounds an agent model call, plus its provenance manifest.
@@ -56,7 +66,7 @@ class AgentRunContext:
 
 class ToolHandler(Protocol):
     """One step-type handler: executes the step against host services and returns the
-    ``output_refs`` dict (small references only). Signals via the step errors above."""
+    ``output_refs`` dict (small references only). Signals via the step outcomes above."""
 
     def __call__(self, session: Any, run: Any, step: Any, profile: Any) -> dict[str, Any]: ...
 

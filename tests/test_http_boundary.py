@@ -30,7 +30,7 @@ class FakeHost:
         self.steps: dict[str, dict[str, Any]] = {}
         self.step_order: dict[str, list[str]] = {}
         self.events: dict[str, list[dict[str, Any]]] = {}
-        self.behaviors: dict[str, dict[str, Any]] = {}
+        self.behaviors: dict[str, Any] = {}
         self.run_end_calls: list[tuple[str, str]] = []
         self.invoked_profiles: list[dict[str, Any]] = []
         self.callback_requests: list[tuple[str, dict[str, str]]] = []
@@ -145,7 +145,10 @@ class FakeHost:
                 host.invoke_barrier.wait(timeout=10)
             host.invoked_profiles.append(body["profile"])
             step = host.steps[step_id]
-            return host.behaviors.get(step["type"], {"outcome": "completed", "output_refs": None})
+            behavior = host.behaviors.get(
+                step["type"], {"outcome": "completed", "output_refs": None}
+            )
+            return behavior() if callable(behavior) else behavior
 
         @api.post("/internal/agent-host/runs/{run_id}/run-end", status_code=204)
         def run_end(run_id: str, body: dict) -> None:
@@ -274,6 +277,28 @@ def test_host_reported_skip_and_failure_map_to_engine_transitions():
     assert host.steps["s2"]["status"] == "failed"
     assert host.steps["s2"]["error"] == "provider unreachable"
     assert ("r1", "hook:failed") in host.run_end_calls
+
+
+def test_host_reported_preparation_reenters_the_approval_gate_without_false_terminal_event():
+    host = FakeHost()
+    host.add_run("r1", approval_policy="manual_review")
+    host.add_step("r1", "s1", "model_call", status="approved", requires_approval=True)
+
+    def prepared_behavior() -> dict[str, Any]:
+        host.steps["s1"]["status"] = "awaiting_approval"
+        host.runs["r1"]["status"] = "awaiting_approval"
+        return {"outcome": "prepared", "reason": "candidate ready"}
+
+    host.behaviors["model_call"] = prepared_behavior
+    _store, final = _drive(host, "r1")
+
+    assert final.status == "awaiting_approval"
+    assert host.steps["s1"]["status"] == "awaiting_approval"
+    types = [event["type"] for event in host.events["r1"]]
+    assert contracts.APPROVAL_GRANTED not in types
+    assert contracts.STEP_COMPLETED not in types
+    assert contracts.STEP_FAILED not in types
+    assert contracts.STEP_SKIPPED not in types
 
 
 def test_streamed_events_are_ordered_and_wire_shaped():

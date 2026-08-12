@@ -8,7 +8,12 @@ from typing import Any
 
 from slimx_agent import contracts, engine
 from slimx_agent.store import UNSET
-from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
+from slimx_agent.tools import (
+    StepActionPrepared,
+    StepExecutionError,
+    StepNotApplicable,
+    ToolRegistry,
+)
 
 
 @dataclass
@@ -199,6 +204,31 @@ def test_not_applicable_skips_and_the_run_continues():
     run = engine.execute_run(store, registry, store.run, profile=object())
     assert run.status == "completed"
     assert store.steps[0].status == "skipped"
+
+
+def test_prepared_action_is_re_read_and_policy_applies_to_the_new_generation():
+    calls = 0
+    store = MemoryStore(
+        FakeRun("r", approval_policy="manual_review"),
+        [FakeStep("s1", "model_call", status="approved", requires_approval=True)],
+    )
+
+    def prepare(ctx, run, step, profile):
+        nonlocal calls
+        calls += 1
+        step.status = "awaiting_approval"
+        store.run.status = "awaiting_approval"
+        raise StepActionPrepared("candidate ready")
+
+    engine.execute_run(store, _registry(prepare), store.run, profile=object())
+
+    assert calls == 1
+    assert store.run.status == "awaiting_approval"
+    assert store.steps[0].status == "awaiting_approval"
+    assert contracts.STEP_COMPLETED not in _types(store)
+    assert contracts.STEP_FAILED not in _types(store)
+    assert contracts.STEP_SKIPPED not in _types(store)
+    assert contracts.APPROVAL_GRANTED not in _types(store)
 
 
 def test_cancel_during_the_last_step_is_not_overwritten_by_completion():

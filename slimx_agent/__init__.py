@@ -49,6 +49,9 @@ from slimx_agent.tools import (
     AgentRunContext as AgentRunContext,
 )
 from slimx_agent.tools import (
+    StepActionPrepared as StepActionPrepared,
+)
+from slimx_agent.tools import (
     StepExecutionError as StepExecutionError,
 )
 from slimx_agent.tools import (
@@ -58,4 +61,4 @@ from slimx_agent.tools import (
     ToolRegistry as ToolRegistry,
 )
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"

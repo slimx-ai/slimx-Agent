@@ -22,7 +22,12 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from slimx_agent import contracts, policies
-from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
+from slimx_agent.tools import (
+    StepActionPrepared,
+    StepExecutionError,
+    StepNotApplicable,
+    ToolRegistry,
+)
 
 # Run statuses a run cannot transition out of.
 TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
@@ -197,6 +202,12 @@ def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile
 
     try:
         output_refs = handler(store.handler_context, run, step, profile)
+    except StepActionPrepared:
+        # The host committed a new action generation and re-parked the step. Re-read it rather
+        # than writing a false completed/skipped/failed state; the outer loop will apply policy
+        # to that exact prepared generation (automatic receipt or human gate).
+        fresh = store.get_step(step_id)
+        return fresh if fresh is not None else step
     except StepNotApplicable as exc:
         return _skip_step(store, run, step_id, step.type, str(exc))
     except StepExecutionError as exc:
