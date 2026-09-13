@@ -5,7 +5,7 @@ change is listed here with a migration note. The newest release heading must equ
 `slimx_agent.__version__` (`scripts/check_version.py` enforces it). A version is a source
 identity only until a tag or published artifact exists; see [`docs/release.md`](docs/release.md).
 
-## 0.20.0 — candidate (not tagged, not published)
+## 0.20.0 — unreleased (not tagged or published)
 
 A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits
 (`6791590`, `61ae7af`, `fc6f4c5`), which it contains unchanged in history.
@@ -41,9 +41,10 @@ A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits
   the netops writes, and `research_iterate`). The portable `MAX_STEPS` stays 12.
 - **Execute endpoints validate their inputs.** Run ids must be plain identifiers; the provider,
   model, and base URL are bounded non-empty strings; `lease_generation` must be a JSON integer.
-- **Hardening of the callback client.** It never uses ambient proxy or netrc settings
-  (`trust_env=False`), quotes host identities into single path segments, and bounds error
-  details to 500 characters.
+- **Hardening of the callback client.** It never routes callbacks through ambient proxy
+  environment variables (`trust_env=False`), while a CA bundle configured through
+  `SSL_CERT_FILE`/`SSL_CERT_DIR` is still honored exactly as before. It quotes host identities
+  into single path segments and bounds error details to 500 characters.
 
 ### Added
 

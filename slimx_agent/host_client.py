@@ -15,7 +15,8 @@ Failure vocabulary (all :class:`HostError`): a non-2xx answer keeps its status c
 transport failure with no observed response is :class:`HostUnavailable`; an answer outside the
 documented wire shape is :class:`HostProtocolError`. The client NEVER retries a callback: after
 a transport failure a mutating callback may or may not have been applied, and only the host's
-durable records can say which. Internal callbacks ignore ambient proxy and netrc settings.
+durable records can say which. Internal callbacks ignore ambient proxy environment variables but
+still honor a CA bundle configured through ``SSL_CERT_FILE`` or ``SSL_CERT_DIR``.
 
 httpx is imported lazily so the core package (contracts/engine/planning) stays importable
 without the ``service`` extra installed.
@@ -24,6 +25,8 @@ without the ``service`` extra installed.
 from __future__ import annotations
 
 import json as _json
+import os
+import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -151,6 +154,22 @@ class _NotFound:
 _NOT_FOUND = _NotFound()
 
 
+def tls_verification() -> ssl.SSLContext | bool:
+    """The trust store for host callbacks, matching httpx's own environment handling for TLS.
+
+    An operator CA bundle from ``SSL_CERT_FILE`` (or, failing that, ``SSL_CERT_DIR``) builds the
+    verification context; otherwise httpx's default verification applies. Proxy environment
+    variables are never consulted for these callbacks.
+    """
+    cafile = os.environ.get("SSL_CERT_FILE")
+    if cafile:
+        return ssl.create_default_context(cafile=cafile)
+    capath = os.environ.get("SSL_CERT_DIR")
+    if capath:
+        return ssl.create_default_context(capath=capath)
+    return True
+
+
 def profile_wire(profile: ProfileView) -> dict[str, str | None]:
     """The provider/model/base_url wire shape. Values are forwarded exactly, never defaulted:
     the host compares them with its own authoritative routing at every callback."""
@@ -191,8 +210,10 @@ class HostClient:
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(STORE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
             # Service-to-host callbacks carry the bearer token and lease: never route them
-            # through ambient proxy environment variables or netrc credentials.
+            # through ambient proxy environment variables. ``trust_env=False`` would also drop
+            # httpx's SSL_CERT_FILE/SSL_CERT_DIR handling, so the CA bundle is passed explicitly.
             trust_env=False,
+            verify=tls_verification(),
         )
         self._per_request_timeouts = True
 

@@ -20,17 +20,18 @@ automated. Tagging and publishing always need explicit release authorization.
 - **Friendly names are not provenance.** An image tag or branch name proves nothing about
   source identity; only a commit SHA or artifact digest does.
 
-## Current state (2026-09-13)
+## Version identity history (recorded 2026-09-13)
 
-- **No tags or artifacts.** The repository has no tags and no published packages or images.
-- **0.18.0 and 0.19.0 exist only as source commits.** 0.18.0 is `6791590`; 0.19.0 is `fc6f4c5`
-  on `feat/standalone-attempt-fencing`.
-- **ControlRoom pins the source, not a release.** It consumes 0.19.0 by exact source archive of
-  `fc6f4c5`, and builds its optional service from the same commit.
-- **`main` is behind.** It is at `bf227a6`; its manifest reads 0.17.0 while its runtime
-  `__version__` reads 0.16.0.
-- **0.20.0 is a candidate.** It lives on a pull request that contains the three 0.18.0/0.19.0
-  commits unchanged.
+- **No tags or artifacts.** No tag, GitHub release, or published package or image exists for any
+  version.
+- **0.18.0 and 0.19.0 are source commits only.** 0.18.0 is `6791590`; 0.19.0 is `fc6f4c5`.
+  ControlRoom consumed 0.19.0 by exact source archive of `fc6f4c5`, and built its optional
+  service from the same commit.
+- **Earlier drift.** Before 0.20.0, `main` (`bf227a6`) declared 0.17.0 in its manifest while its
+  runtime `__version__` read 0.16.0. From 0.20.0 the manifest version is derived from
+  `__version__`.
+- **0.20.0 is an unreleased source version.** It contains the 0.18.0/0.19.0 commits unchanged.
+  Consumers identify it by exact commit until a tag exists.
 
 ## Procedure
 

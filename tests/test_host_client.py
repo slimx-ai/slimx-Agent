@@ -7,8 +7,11 @@ transport failure.
 
 from __future__ import annotations
 
+import ssl
+from pathlib import Path
 from typing import Any
 
+import certifi
 import httpx
 import pytest
 
@@ -25,6 +28,7 @@ from slimx_agent.host_client import (
     HostUnavailable,
     profile_from_wire,
     profile_wire,
+    tls_verification,
 )
 from slimx_agent.http_store import HttpRunStore, RunSnapshot, StepSnapshot
 from slimx_agent.runtime import RunProfile
@@ -110,15 +114,72 @@ def test_identities_are_quoted_into_exactly_one_path_segment():
     )
 
 
-def test_a_real_client_ignores_ambient_proxy_and_netrc_settings(monkeypatch):
+def test_a_real_client_ignores_ambient_proxy_settings(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
     client = HostClient("http://api:8000/", token="tkn")
     inner = client._client
     assert isinstance(inner, httpx.Client)
     assert inner.trust_env is False
     assert str(inner.base_url) == "http://api:8000"
     assert "authorization" not in {key.lower() for key in inner.headers}
+
+
+def _single_ca_bundle(tmp_path: Path) -> str:
+    """An operator CA bundle holding exactly one certificate (the first in certifi's)."""
+    pem = Path(certifi.where()).read_text(encoding="ascii")
+    end = "-----END CERTIFICATE-----"
+    first = pem[pem.index("-----BEGIN CERTIFICATE-----") : pem.index(end) + len(end)]
+    bundle = tmp_path / "operator-ca.pem"
+    bundle.write_text(first + "\n", encoding="ascii")
+    return str(bundle)
+
+
+def test_callbacks_trust_exactly_the_operator_ca_file_which_wins_over_a_directory(
+    monkeypatch, tmp_path
+):
+    # trust_env=False alone would silently drop SSL_CERT_FILE and fall back to certifi, so a
+    # host behind a private CA would stop verifying; the bundle is honored explicitly.
+    monkeypatch.setenv("SSL_CERT_FILE", _single_ca_bundle(tmp_path))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "not-consulted"))
+    context = tls_verification()
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert context.cert_store_stats()["x509_ca"] == 1
+
+
+def test_callbacks_use_an_operator_ca_directory_instead_of_the_defaults(monkeypatch, tmp_path):
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path))
+    context = tls_verification()
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    # Directory certificates load lazily at handshake time; no default bundle was loaded.
+    assert context.cert_store_stats()["x509_ca"] == 0
+
+
+def test_without_an_operator_ca_the_default_verification_applies(monkeypatch):
+    monkeypatch.setenv("SSL_CERT_FILE", "")
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    assert tls_verification() is True
+
+
+def test_a_real_client_is_built_with_the_operator_trust_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("SSL_CERT_FILE", _single_ca_bundle(tmp_path))
+    seen: dict[str, Any] = {}
+    real_client = httpx.Client
+
+    def recording_client(**kwargs: Any) -> httpx.Client:
+        seen.update(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", recording_client)
+    HostClient("https://api.internal:8443", token="tkn")
+    assert seen["trust_env"] is False
+    assert isinstance(seen["verify"], ssl.SSLContext)
+    assert seen["verify"].cert_store_stats()["x509_ca"] == 1
 
 
 def test_a_client_needs_a_url_or_an_injected_transport():

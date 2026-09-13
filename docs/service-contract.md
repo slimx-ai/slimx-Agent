@@ -18,8 +18,9 @@ shape.
 - **Health.** `GET /health` is open and reports `auth_enabled`, so the host's deep health can
   flag one-sided configuration. It never returns the token.
 
-The service's own callbacks carry the same bearer token, attached per request. They never
-use ambient proxy or netrc settings.
+The service's own callbacks carry the same bearer token, attached per request. They ignore
+ambient proxy environment variables and honor a CA bundle configured through `SSL_CERT_FILE` or
+`SSL_CERT_DIR`.
 
 ## Endpoints
 
