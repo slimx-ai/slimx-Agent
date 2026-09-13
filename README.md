@@ -1,55 +1,141 @@
 # SlimX-Agent
 
-The **portable agent core** of the SlimX platform — the contracts, tool-dispatch boundary,
-runtime protocol, and planning layer extracted from SlimX-AI ControlRoom.
+The portable agent core of the SlimX platform:
 
-SlimX layering:
+- the step, grant, policy, and event **contracts**;
+- the deterministic **permission and approval policies**;
+- a typed **execution engine** that drives runs through a host-supplied store and tool registry;
+- portable **planning** primitives;
+- an optional **standalone service** that runs the same engine in its own container.
 
-| Layer | Repo | Job |
+| Layer | Repository | Job |
 | --- | --- | --- |
-| Model execution | `slimx` | providers, payloads, retries, parallel fan-out |
+| Model execution | `slimx` | providers, payloads, retries, structured output, parallel fan-out |
 | Knowledge / retrieval | `SlimX-RAG` | ingest, chunk, embed, index, retrieve, cite |
-| Connector transport | `SlimX-MCP` | SSRF-guarded, capped MCP JSON-RPC |
-| **Agent core** | **`SlimX-Agent`** | **step/grant/event contracts, ToolRegistry, AgentRuntime protocol, planning** |
-| Reasoning workspace | `slimx-brainstorm` (ControlRoom) | UI, persistence, capabilities, orchestration |
+| Connector transport | `SlimX-MCP` | SSRF-guarded, capped MCP transport |
+| **Agent core** | **`SlimX-Agent`** | **contracts, policies, typed engine, planning primitives, standalone service** |
+| Reasoning workspace | `slimx-CR` (SlimX-AI ControlRoom) | UI, persistence, authorization, capabilities, host orchestration |
 
-## What it owns — and deliberately does not
+## Current adoption
 
-**Owns:**
-- `slimx_agent.contracts` — the single vocabulary: step types (assisted / external /
-  code / build / orchestration), grantable tools, run modes, approval policies, and the
-  durable event types. Stdlib-only.
-- `slimx_agent.tools` — `ToolRegistry` (the ONLY dispatcher→tool path), the step error
-  vocabulary (`StepExecutionError` fails a run; `StepNotApplicable` skips honestly), and the
-  typed `AgentRunContext` hosts build from their own state. Stdlib-only.
-- `slimx_agent.runtime` — the `AgentRuntime` protocol every host route consumes, plus
-  `RunProfile` (the host resolves providers and enforces cloud egress BEFORE calling the
-  runtime) and the stable conflict errors. Stdlib-only.
-- `slimx_agent.planning` — plan schemas (defaulted dataclasses for structured output +
-  strict pydantic validation), best-effort `repair_plan_data`, and the grant-aware
-  `build_planner_prompt`.
+SlimX-AI ControlRoom consumes this package directly, pinned to an exact source commit (its
+compatibility matrix names the commit):
 
-**Does not own:** execution engines, persistence, model transport, credentials, or any host
-capability (evidence, synthesis, RAG, MCP, sandboxes). Hosts register capabilities as
-`ToolRegistry` handlers and implement `AgentRuntime`. **No agent framework**
-(LangChain/LangGraph/CrewAI/AutoGen/OpenAI-Agents-SDK) is, or may ever become, a dependency.
+- `contracts`, `tools`, and `policies` — ControlRoom's modules of the same names are thin
+  re-exports of these objects (identity, not copies).
+- `engine` — ControlRoom's executor drives every in-process run through
+  `engine.execute_run_events`, over its SQL `RunStore` and its governed `HOST_TOOLS` registry.
+- `service` — ControlRoom's optional standalone container is built from this repository and
+  runs the same engine against the host's `/internal/agent-host/*` callback API.
 
-## Consumption
+These stay with the host by design:
 
-ControlRoom currently keeps byte-identical copies of `contracts`/`tools`/`runtime` (a parity
-guard test on the host compares them against this checkout) until this repo is published;
-then the host modules become re-export shims of this package. The standalone agent service's
-HTTP surface is documented in [`docs/service-contract.md`](docs/service-contract.md) so the
-container can eventually be built from this repo (extraction plan §8: needs the RunStore +
-host-tool HTTP boundary first).
+- persistence and its SQL store;
+- authorization and workspace scope;
+- provider-profile resolution and egress policy;
+- every tool handler;
+- approval receipts and the invocation ledger;
+- the actor-aware root-launch service;
+- the active planner.
+
+**Planning ownership.** ControlRoom's active planner is host-owned: its schema, prompt,
+readiness-aware shortlisting, repair, and 30-step validation ceiling. `slimx_agent.planning` is
+the portable planning API, with a 12-step default ceiling. Unifying the two needs a shared,
+versioned plan-limit contract, which is tracked in the host's roadmap. Do not edit either
+ceiling to match the other.
+
+## One engine, two placements
+
+- **In-process:** the host calls `engine.execute_run_events(store, registry, run, profile=...)`
+  with its own store, registry, and profile type.
+- **Standalone:** `slimx_agent.service` runs the loop in its own container. Every store
+  operation and tool invocation is an authenticated, lease-fenced callback to the host. The
+  container holds no database, credentials, or host code. The wire contract is
+  [`docs/service-contract.md`](docs/service-contract.md).
+
+## Guarantees and their limits
+
+- **Gate order.** The permission gate runs before the approval gate. Grants never imply
+  approval, and approval never bypasses a missing grant: an already-approved step is
+  re-checked against the run's current grants.
+- **Risk tiers × policies.** The table lives in `policies.py` and is written out as finite
+  tests in `tests/test_policy_matrix.py`.
+  - `manual` and `review_checkpoints` currently share one predicate.
+  - Legacy runs with `approval_policy` null consult only the planner flag; hosts must hard-gate
+    them at their own dispatch boundary.
+  - A strictly distinct approve-every-step policy would be a new, versioned contract.
+- **Pre-approval.** Only `web_search` and `web_fetch` can be pre-approved, only under
+  `auto_complete`, and only from a real list; a junk stored value pre-approves nothing.
+- **Outcomes.**
+  - `completed`, `skipped`, and `failed` are the only terminal step states the engine writes.
+  - A prepared action generation re-enters the gates, and an earlier approval never carries
+    over.
+  - An unknown outcome (`StepOutcomeUnknown`) ends the drive with no terminal write and no
+    retry; the host's durable invocation record decides what happened.
+- **"Completed" means the loop finished.** A `completed` run status means every step reached
+  `completed` or `skipped` without a stop. It is not a verified deliverable. Criterion-level
+  acceptance, checked artifacts, and exact-snapshot executable checks are host
+  responsibilities.
+- **The check runner is not an isolation boundary.** `/internal/run-check` is absent unless
+  explicitly enabled. It runs a host-allowlisted command in a run's mutable workspace, bounded
+  by timeout, output cap, and process-group kill. It does not contain the filesystem, network,
+  CPU, or memory, and it cannot back an exact-snapshot check receipt: ControlRoom refuses
+  service-mode checks for exactly that reason. An isolated exact-snapshot runner is a separate,
+  future deliverable.
+
+## Static contracts
+
+The engine boundary is typed and checked with `mypy --strict`, and the package ships `py.typed`:
+
+```python
+from slimx_agent import engine
+from slimx_agent.tools import ToolRegistry
+
+registry: ToolRegistry[Session, AgentRun, AgentStep, ExecProfile] = ToolRegistry()
+registry.register("model_call", handle_model_call)  # a wrong handler shape is a type error
+engine.execute_run(SqlRunStore(session), registry, run, profile=profile)
+```
+
+- **Structural views.** `RunView`, `StepView`, and `ProfileView` describe exactly the fields
+  the engine reads.
+- **Generic boundaries.** `RunStore[RunT, StepT, ContextT]` and
+  `ToolRegistry[ContextT, RunT, StepT, ProfileT]` tie one host's store, handlers, and run
+  objects together.
+- **Enforced by tests.** `tests/typing/` holds conformance fixtures that must pass, and
+  deliberately wrong adapters that must fail with exact diagnostics.
+
+Static types do not validate hostile input at runtime. The standalone wire boundary also
+parses strictly at runtime.
+
+## Install
+
+There is no package-index release yet. Consume an exact source commit:
+
+```bash
+pip install "slimx-agent @ https://github.com/slimx-ai/SlimX-Agent/archive/<commit>.tar.gz"
+pip install "slimx-agent[service] @ https://github.com/slimx-ai/SlimX-Agent/archive/<commit>.tar.gz"
+```
+
+The core install needs only pydantic. The `service` extra adds FastAPI, uvicorn, and httpx.
+Release identity and the gated release procedure are in [`docs/release.md`](docs/release.md);
+changes are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Development
 
+These commands are the CI gate, run on Python 3.12 and 3.13 at the exact PR head:
+
 ```bash
-pip install -e '.[dev]'
-ruff check .
-pytest
+pip install -e '.[dev,service]'
+python scripts/check_version.py        # one version: source, pyproject, changelog, metadata, health
+ruff check . && ruff format --check .
+mypy                                   # strict, package + scripts
+pytest --cov --cov-report=json:coverage.json
+python scripts/check_coverage.py coverage.json
+python scripts/verify_distribution.py  # build sdist+wheel; install and import outside the tree
 ```
+
+Tests are offline: no provider, database, or host service. Contributor rules for this repository
+are in [`AGENTS.md`](AGENTS.md).
 
 ## License
 
