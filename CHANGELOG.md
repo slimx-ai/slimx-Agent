@@ -21,6 +21,12 @@ A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits
 - **Approval never bypasses a missing grant.** The permission gate now also re-checks an
   already `approved` step, so a grant revoked after approval produces an honest skip instead of
   a dispatch.
+- **Unrecognized step statuses are refused.** The engine recognizes exactly `pending`,
+  `awaiting_approval`, `approved`, `running`, `completed`, `failed`, and `skipped`
+  (`contracts.STEP_STATUSES`). A step in any other status raises `engine.UnknownStepStatus`,
+  and the drive ends with nothing written for it. Previously a status such as `queued` or
+  `Pending` matched neither gate and was dispatched. The standalone store refuses such a
+  snapshot as a `HostProtocolError`.
 - **Stored grant and pre-approval values are read fail-closed.** Only a list/tuple/set of
   strings counts. A junk string no longer pre-approves by substring, and a mapping no longer
   grants its keys. Pre-approval remains limited to `web_search`/`web_fetch`.
@@ -31,7 +37,8 @@ A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits
 - **`/internal/run-check` is off by default.** It is registered only when
   `SLIMX_AGENT_ENABLE_RUN_CHECK` is set, and then refuses requests unless
   `SLIMX_AGENT_INTERNAL_TOKEN` is configured (there is no tokenless mode for command
-  execution). Requests are validated strictly (422, with no process started); `run_id` must be
+  execution). Requests are validated strictly, and `timeout_seconds` must be a JSON number (422,
+  with no process started); `run_id` must be
   a plain identifier whose resolved directory is a direct child of the workspace root. Output is
   bounded while reading, stdin is closed, and the whole process group is killed on every exit.
   The response gains `output_truncated`. This runner is still not an isolation boundary or an
@@ -44,7 +51,8 @@ A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits
 - **Hardening of the callback client.** It never routes callbacks through ambient proxy
   environment variables (`trust_env=False`), while a CA bundle configured through
   `SSL_CERT_FILE`/`SSL_CERT_DIR` is still honored exactly as before. It quotes host identities
-  into single path segments and bounds error details to 500 characters.
+  into single path segments, refuses empty and dot-only identities (which HTTP clients would
+  normalize out of the path), and bounds error details to 500 characters.
 
 ### Added
 
@@ -55,6 +63,7 @@ A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits
   output keeps executable step data. `planning.advertised_step_types()` and
   `NEVER_ADVERTISED_STEP_TYPES`.
 - `HostUnavailable` and `HostProtocolError` (both `HostError`); `policies.normalize_preapproved`.
+- `contracts.STEP_STATUSES` and `engine.UnknownStepStatus`.
 - `CAPABILITY_BY_TYPE` entries for `knowledge_retrieve` and `compose_report`, and a
   `plugin_tools` grant label.
 - CI: a Python 3.12/3.13 matrix at the exact PR head, a version-agreement check, ruff lint and

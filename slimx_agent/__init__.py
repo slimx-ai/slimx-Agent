@@ -26,7 +26,9 @@ from slimx_agent.contracts import (
     APPROVAL_POLICIES,
     EVENT_TYPES,
     GRANTABLE_TOOLS,
+    STEP_STATUSES,
 )
+from slimx_agent.engine import UnknownStepStatus
 from slimx_agent.runtime import AgentRunConflict, AgentRuntime, ProfileView, RunProfile
 from slimx_agent.store import UNSET, RunStore, RunView, StepView
 from slimx_agent.tools import (
@@ -45,6 +47,7 @@ __all__ = [
     "APPROVAL_POLICIES",
     "EVENT_TYPES",
     "GRANTABLE_TOOLS",
+    "STEP_STATUSES",
     "UNSET",
     "AgentRunConflict",
     "AgentRunContext",
@@ -60,6 +63,7 @@ __all__ = [
     "StepView",
     "ToolHandler",
     "ToolRegistry",
+    "UnknownStepStatus",
     "__version__",
 ]
 

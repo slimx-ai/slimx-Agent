@@ -12,6 +12,8 @@ shape.
 
 - **Configured token.** The execute endpoints require `Authorization: Bearer <token>`. The
   comparison is constant-time and byte-wise, so a malformed header is a 401, never a 500.
+- **Token characters.** Use a printable-ASCII token. Header values arrive decoded as Latin-1, so
+  a non-ASCII token can never match; it fails closed with 401.
 - **No token.** Leaving it empty turns execute auth off. This is the documented local-first
   compatibility mode.
 - **Run-check.** `/internal/run-check` has no tokenless mode.
@@ -82,7 +84,8 @@ separately proves that this worker still owns this particular execution attempt.
 
 The service calls these endpoints under `/internal/agent-host`. Every response is parsed
 strictly: a field with the wrong JSON type is a protocol error, never coerced. Identities are
-quoted into single path segments.
+quoted into single path segments. An empty, `.`, or `..` identity is refused, because HTTP
+clients would normalize it out of the path.
 
 | Callback | Request | Response |
 | --- | --- | --- |
@@ -107,7 +110,9 @@ A **run snapshot** has these fields:
 
 A **step snapshot** has these fields:
 
-- `id`, `type`, and `status`: non-empty strings;
+- `id` and `type`: non-empty strings;
+- `status`: one of `pending`, `awaiting_approval`, `approved`, `running`, `completed`, `failed`,
+  or `skipped`. Anything else is a protocol error, and the step is never dispatched;
 - `title`: a string or null;
 - `requires_approval`: a boolean or null.
 
@@ -174,7 +179,7 @@ workspace directory under `AGENT_WORKSPACE_ROOT`.
   | --- | --- |
   | `argv` | 1–64 non-empty strings, each ≤4096 characters, no NUL bytes |
   | `run_id` | Plain identifier; the resolved directory must be a direct child of the resolved workspace root |
-  | `timeout_seconds` | Optional; finite, >0 and ≤600; default 120 |
+  | `timeout_seconds` | Optional JSON number (not a string or boolean); finite, >0 and ≤600; default 120 |
   | `output_cap` | Optional; JSON integer from 1 to 100000; default 20000 |
 
 - **Enforced.**

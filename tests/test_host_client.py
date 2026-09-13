@@ -114,6 +114,16 @@ def test_identities_are_quoted_into_exactly_one_path_segment():
     )
 
 
+@pytest.mark.parametrize("identity", ["", ".", ".."])
+def test_empty_and_dot_identities_are_refused_before_any_request(identity):
+    # quote() leaves "." unescaped and HTTP clients drop "."/".." segments: "/steps/.." would
+    # reach "/internal/agent-host" instead of one step.
+    recorder = Recorder(default=ok(STEP))
+    with pytest.raises(HostProtocolError):
+        HostClient(client=recorder).get_step(identity)
+    assert recorder.requests == []
+
+
 def test_a_real_client_ignores_ambient_proxy_settings(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
@@ -442,6 +452,8 @@ def test_malformed_run_snapshots_are_refused_not_coerced(override):
         {"type": None},
         {"type": 7},
         {"status": None},
+        {"status": "queued"},  # outside the closed vocabulary: never dispatched past the gates
+        {"status": "Pending"},
         {"title": 5},
         {"requires_approval": "false"},
     ],

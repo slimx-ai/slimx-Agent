@@ -364,6 +364,17 @@ def test_a_transport_failure_is_a_bounded_502(monkeypatch):
     assert "host unavailable" in response.json()["detail"]
 
 
+def test_a_step_in_an_unrecognized_status_is_refused_and_never_invoked(monkeypatch):
+    host = FakeHost()
+    host.add_run("r1", allowed_tools_json=None)
+    host.add_step("r1", "s1", "web_search", status="queued")
+    response = _service(host, monkeypatch).post("/agent/runs/r1/execute", json=execution_body())
+    assert response.status_code == 502
+    assert "unrecognized status" in response.json()["detail"]
+    assert host.invoked_profiles == []
+    assert host.steps["s1"]["status"] == "queued"
+
+
 def test_host_error_details_are_bounded_at_the_service_edge(monkeypatch):
     host = _one_step_host()
     host.behaviors["model_call"] = _raising(HTTPException(409, detail="x" * 20_000))
@@ -529,7 +540,8 @@ def test_an_observer_disconnect_does_not_cancel_the_drive(monkeypatch):
 
     assert _wait_for(lambda: host.runs["r1"]["status"] == "completed")
     assert [host.steps[f"s{i}"]["status"] for i in range(1, 4)] == ["completed"] * 3
-    assert host.run_end_calls == [("r1", "completed")]
+    # The drive thread records "completed" before its run-end hook returns: wait for both.
+    assert _wait_for(lambda: host.run_end_calls == [("r1", "completed")])
     assert _wait_for(lambda: not _drive_threads(), timeout=5.0)
 
 

@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from slimx_agent import contracts
 from slimx_agent.host_client import HostClient, HostProtocolError
 from slimx_agent.store import UNSET, EventPayload, HostId, OutputRefs, UnsetType
 
@@ -67,11 +68,15 @@ class StepSnapshot:
     @classmethod
     def from_wire(cls, data: Mapping[str, object]) -> StepSnapshot:
         what = "step snapshot"
+        status = _required_str(data, "status", what)
+        if status not in contracts.STEP_STATUSES:
+            # The gates key on exact statuses: an unrecognized one is refused, never dispatched.
+            raise HostProtocolError(f"the {what} has an unrecognized status {status[:64]!r}")
         return cls(
             id=_required_str(data, "id", what),
             type=_required_str(data, "type", what),
             title=_optional_str(data, "title", what) or "",
-            status=_required_str(data, "status", what),
+            status=status,
             requires_approval=_optional_bool(data, "requires_approval", what),
             raw=dict(data),
         )

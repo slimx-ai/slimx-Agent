@@ -8,7 +8,8 @@ event vocabulary from :mod:`slimx_agent.contracts`. Invariants hosts rely on: ga
 (permission BEFORE approval), fresh run re-reads so mid-run pause/cancel/policy changes are
 honored (including during the LAST step), legacy ``approval_policy IS NULL`` behavior, event
 payload shapes, and no terminal step state without an authoritative outcome — a prepared
-action generation re-enters the gates, and an unknown outcome ends the drive untouched.
+action generation re-enters the gates, an unknown outcome ends the drive untouched, and a step
+in an unrecognized status is refused rather than dispatched ungated.
 
 The engine holds no model transport, no persistence, and no host capabilities — hosts
 provide those via the registry's handlers (which receive ``store.handler_context``), and may
@@ -33,6 +34,22 @@ from slimx_agent.tools import (
 
 # Run statuses a run cannot transition out of.
 TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
+
+
+class UnknownStepStatus(RuntimeError):
+    """A host step's status is outside :data:`~slimx_agent.contracts.STEP_STATUSES`.
+
+    The gates key on exact statuses, so the engine refuses such a step instead of dispatching it
+    ungated, and ends the drive without writing anything for it. The host owns the repair.
+    """
+
+    def __init__(self, step_id: HostId, status: str) -> None:
+        super().__init__(
+            f"step {step_id!r} has unrecognized status {str(status)[:64]!r}; it was not dispatched"
+        )
+        self.step_id = step_id
+        self.status = status
+
 
 # Monotonic clock for the wall budget, as a module alias so tests can stub it.
 _now = time.monotonic
@@ -106,6 +123,10 @@ def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
         step = next((s for s in steps if s.status not in ("completed", "skipped")), None)
         if step is None:
             break  # every step is done — fall through to the completion block
+        if step.status not in contracts.STEP_STATUSES:
+            # Fail closed: every gate below keys on exact statuses, so an unrecognized one would
+            # otherwise reach dispatch with neither the permission nor the approval gate applied.
+            raise UnknownStepStatus(step.id, step.status)
         if step.status == "failed":
             store.set_run_status(run, "failed")
             yield from drain()

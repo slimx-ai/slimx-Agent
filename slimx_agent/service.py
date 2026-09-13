@@ -45,7 +45,15 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from slimx_agent import __version__, engine
 from slimx_agent.host_client import ExecutionAttempt, HostClient, HostError, bounded_detail
@@ -127,7 +135,7 @@ class RunCheckBody(BaseModel):
         min_length=1, max_length=64
     )
     run_id: str = Field(pattern=RUN_ID_PATTERN)
-    timeout_seconds: float = Field(default=120.0, gt=0, le=600, allow_inf_nan=False)
+    timeout_seconds: StrictFloat = Field(default=120.0, gt=0, le=600, allow_inf_nan=False)
     output_cap: StrictInt = Field(default=20_000, ge=1, le=100_000)
 
     @field_validator("argv")

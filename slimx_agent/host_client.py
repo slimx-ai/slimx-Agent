@@ -394,8 +394,15 @@ def profile_from_wire(data: Mapping[str, object]) -> RunProfile:
 
 
 def _segment(value: HostId) -> str:
-    """One URL path segment for a host identity: quoted, so an identity can never add path."""
-    return quote(str(value), safe="")
+    """One URL path segment for a host identity: quoted, so an identity can never add path.
+
+    Empty and dot-only identities are refused. ``quote`` leaves ``.`` unescaped and HTTP clients
+    remove ``.``/``..`` segments, so ``/steps/..`` would reach the parent path instead.
+    """
+    text = str(value)
+    if text in ("", ".", ".."):
+        raise HostProtocolError(f"host identity {text!r} cannot be a URL path segment")
+    return quote(text, safe="")
 
 
 def _expect_object(value: object, what: str) -> dict[str, Any]:

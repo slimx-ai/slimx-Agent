@@ -156,6 +156,25 @@ def test_hard_gate_parks_even_in_auto_complete_and_resumes_after_approval():
     assert store.steps[0].status == "completed"
 
 
+def test_the_step_status_vocabulary_is_closed_and_exact():
+    assert contracts.STEP_STATUSES == frozenset(
+        {"pending", "awaiting_approval", "approved", "running", "completed", "failed", "skipped"}
+    )
+
+
+@pytest.mark.parametrize("status", ["queued", "Pending", "prepared", "cancelled", ""])
+def test_an_unrecognized_step_status_is_refused_not_dispatched_past_the_gates(status):
+    # An ungranted, hard-gated tool: a status that slipped past both gates would dispatch it.
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=None), [FakeStep("s1", "web_search", status=status)]
+    )
+    with pytest.raises(engine.UnknownStepStatus) as caught:
+        engine.execute_run(store, _registry(), store.run, profile=object())
+    assert caught.value.step_id == "s1"
+    assert store.steps[0].status == status
+    assert store.events == []
+
+
 def test_legacy_policy_honors_planner_flag_and_auto_approve():
     gated = FakeStep("s1", "model_call", requires_approval=True)
     store = MemoryStore(FakeRun("r", approval_policy=None), [gated])
