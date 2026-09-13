@@ -1,26 +1,30 @@
-"""The SlimX-Agent runtime interface (Stage C of docs/slimx-agent-extraction-plan.md).
+"""The host-facing runtime seam: the resolved execution profile and the ``AgentRuntime`` protocol.
 
-``AgentRuntime`` is the seam between the host (ControlRoom routes/UI) and the agent engine:
+``AgentRuntime`` is the seam between a host's routes and its agent implementation::
 
-    ControlRoom route → AgentRuntime → implementation
+    host route → AgentRuntime → in-process or remote implementation
 
-The in-process implementation (``app.slimx_agent.inprocess``) wraps the existing
-``services/agent`` modules verbatim today; Stage E adds an HTTP client implementation with
-the same surface so the runtime can move into its own service/container without touching the
-routes again.
+ControlRoom implements it in-process and over the standalone service with the same surface.
 
 Design rules:
-- **Session ownership stays with the caller.** Every method takes the SQLModel ``Session``
-  first; the runtime never opens/closes sessions (the SSE route owns its worker-thread
-  session exactly as before). This is the documented transitional shared-DB design.
-- **Domain semantics live here, transport stays in routes.** State-machine guards (what can
-  be paused/approved/rerun) raise :class:`AgentRunConflict`; routes translate to HTTP 409
-  with the same detail strings, keeping responses byte-identical. Record resolution (404s),
-  authz, provider-profile resolution, cloud-egress enforcement, and review-packet creation
-  remain host concerns (Stage D formalizes them as adapters).
-- The interface is typed loosely (``Any`` for ORM rows) on purpose: the rows are ControlRoom's
-  SQLModel objects until the RunStore protocol lands (Stage E); pinning the protocol to the
-  ORM types now would couple the contract layer to the database.
+
+- **Session ownership stays with the caller.** Every method takes the host session first; the
+  runtime never opens or closes sessions.
+- **Domain semantics live here, transport stays in routes.** State-machine guards raise
+  :class:`AgentRunConflict`; routes translate it to HTTP 409 with the same detail strings.
+  Record resolution, authorization, provider-profile resolution, cloud-egress enforcement, and
+  review-packet creation remain host concerns.
+- ``AgentRuntime`` is typed with ``Any`` for sessions and ORM rows deliberately: they are host
+  types, and this host-facing protocol is broad. The engine's own boundary is strictly typed
+  (:class:`~slimx_agent.store.RunStore`, :class:`~slimx_agent.tools.ToolRegistry`); narrowing
+  this protocol into smaller capability interfaces is separate, versioned work.
+
+**Compatibility exception — ``instantiate_template``.** The member predates actor-aware root
+launch and takes no actor. ControlRoom deliberately does not implement it on its runtime: root
+runs are launched only by its actor-aware, idempotent launch service. Hosts may omit the member;
+the package never calls it. A future minor release is expected to remove it from this protocol
+(or move it to a separate, actor-carrying launch interface) rather than restore an actorless
+root launcher.
 """
 
 from __future__ import annotations
@@ -39,12 +43,31 @@ class AgentRunConflict(Exception):
     """
 
 
+class ProfileView(Protocol):
+    """The profile fields the package reads: provider, provider-native model, and endpoint.
+
+    Hosts may carry more (ControlRoom adds safe provider settings and profile identity); the
+    standalone service forwards exactly these three to the host, which re-resolves the rest
+    from its own authoritative records.
+    """
+
+    @property
+    def provider(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def base_url(self) -> str | None: ...
+
+
 @dataclass(frozen=True)
 class RunProfile:
     """The provider/model a run's model-using operations execute against.
 
     The HOST resolves this (provider profile → provider/model/base_url) and enforces cloud
-    egress BEFORE handing it to the runtime — the runtime never resolves credentials.
+    egress BEFORE handing it to the runtime — the runtime never resolves credentials. ``model``
+    is the provider-native identifier (for example ``qwen3:8b``), never a prefixed reference.
     """
 
     provider: str
@@ -53,10 +76,10 @@ class RunProfile:
 
 
 class AgentRuntime(Protocol):
-    """The run-lifecycle surface ControlRoom consumes. One method per route operation.
+    """The run-lifecycle surface a host's routes consume. One method per route operation.
 
     All methods are synchronous and stateless; implementations must be safe to share across
-    requests and threads (the streaming route calls ``execute_run_events`` from a worker
+    requests and threads (a streaming route calls ``execute_run_events`` from a worker
     thread with its own session).
     """
 
@@ -132,6 +155,8 @@ class AgentRuntime(Protocol):
         self, session: Any, template: Any, *, name: str | None, description: str | None
     ) -> Any: ...
     def delete_template(self, session: Any, template: Any) -> None: ...
+    # Compatibility exception: actorless root launch. See the module docstring; hosts with an
+    # actor-aware launch owner omit it, and this package never calls it.
     def instantiate_template(
         self,
         session: Any,

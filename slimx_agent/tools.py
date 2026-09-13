@@ -1,29 +1,30 @@
-"""SlimX-Agent tool & context contracts (Stage D of docs/slimx-agent-extraction-plan.md).
+"""SlimX-Agent tool contracts: step outcomes, the typed handler shape, and the registry.
 
-The explicit boundary between the agent engine and the host's capabilities:
+The explicit boundary between the agent engine and a host's capabilities:
 
-- **Step outcomes** — failure, not-applicable, and durable preparation signals besides success.
-  Moved here
-  from ``executor_service`` (which re-exports them) because they are the engine's vocabulary,
-  not an implementation detail.
-- **ToolHandler / ToolRegistry** — the executor dispatches step types ONLY through a registry
-  the host populates. ControlRoom registers its 11 handlers (model calls, RAG, context,
-  synthesis, evidence, web search, code tools, build sandbox); a future host registers its
-  own. The registry fails loudly on duplicate registration and resolves unknown types to
-  ``None`` (the dispatcher fails that step honestly).
-- **AgentRunContext / ContextProvider** — the typed context package a host hands the engine
-  for model-using steps. ControlRoom builds it from the run conversation's enabled context
-  sources (review packet, attach_context, web_search, code, rag); the engine never reaches
-  into host tables for context itself.
+- **Step outcomes** — besides returning output references, a handler may signal a genuine
+  failure (:class:`StepExecutionError`), an honest skip (:class:`StepNotApplicable`), a durably
+  prepared new action generation (:class:`StepActionPrepared`), or that the step's outcome is
+  unknown to the engine (:class:`StepOutcomeUnknown`). Only failure and skip produce terminal
+  step states; the other two never do.
+- **ToolHandler / ToolRegistry** — the engine dispatches step types ONLY through a registry the
+  host populates. ControlRoom registers one governed handler per contract step type; the
+  standalone service registers one remote handler per type (``http_tools``). The registry fails
+  loudly on duplicate registration and resolves unknown types to ``None`` (the engine fails that
+  step honestly).
+- **AgentRunContext / ContextProvider** — the typed context package a host hands model-using
+  handlers; the engine never reaches into host tables for context itself.
 
-Dependency rule: stdlib only (same as ``contracts``), so this module moves verbatim into the
-standalone package. A guard test enforces it.
+Dependency rule: the standard library plus this package only, so every host can import the
+vocabulary without the ``service`` extra. A guard test enforces it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Protocol
+
+from slimx_agent.store import OutputRefs
 
 
 class StepExecutionError(Exception):
@@ -42,8 +43,20 @@ class StepActionPrepared(Exception):
     """The host durably prepared a new action generation instead of executing the target.
 
     This is a control-plane outcome, not a failure or a skip. The engine re-reads the
-    authoritative run and step and stops at that prepared generation without emitting a terminal
-    step event. A later drive applies the approval policy to the new action.
+    authoritative run and step and applies the gates to that prepared generation afresh without
+    emitting a terminal step event; approval of an earlier generation never carries over.
+    """
+
+
+class StepOutcomeUnknown(Exception):
+    """The engine could not observe an authoritative outcome for the step.
+
+    Raised when a step may already have crossed the host's entry boundary but its outcome
+    never reached the engine — for example the standalone service lost the invocation
+    response, the host refused the callback, or the answer was not a recognizable outcome.
+    It is neither a failure nor a skip: the engine writes no terminal step state or event, never
+    retries the step, and re-raises this exception to end the drive. The host's durable
+    invocation record, not the engine, decides what happened.
     """
 
 
@@ -64,33 +77,48 @@ class AgentRunContext:
         return not self.reference_text
 
 
-class ToolHandler(Protocol):
+class ToolHandler[ContextT, RunT, StepT, ProfileT](Protocol):
     """One step-type handler: executes the step against host services and returns the
-    ``output_refs`` dict (small references only). Signals via the step outcomes above."""
+    ``output_refs`` dict (small references only, or ``None``). Signals via the step outcomes
+    above. Parameters are positional: ``(handler_context, run, step, profile)``."""
 
-    def __call__(self, session: Any, run: Any, step: Any, profile: Any) -> dict[str, Any]: ...
+    def __call__(
+        self,
+        context: ContextT,
+        run: RunT,
+        step: StepT,
+        profile: ProfileT,
+        /,
+    ) -> OutputRefs | None: ...
 
 
-class ContextProvider(Protocol):
+class ContextProvider[ContextT, RunT](Protocol):
     """Builds the :class:`AgentRunContext` for a run — the host's translation of its own
     workspace/document/conversation state into the engine's typed context package."""
 
-    def __call__(self, session: Any, run: Any) -> AgentRunContext: ...
+    def __call__(self, context: ContextT, run: RunT, /) -> AgentRunContext: ...
 
 
-class ToolRegistry:
-    """Step type → handler. The ONLY path from the dispatcher to a tool implementation."""
+class ToolRegistry[ContextT, RunT, StepT, ProfileT]:
+    """Step type → handler. The ONLY path from the dispatcher to a tool implementation.
+
+    Parameterize it with the host's handler context, run, step, and profile types (for
+    example ``ToolRegistry[Session, AgentRun, AgentStep, ExecProfile]``) so a type checker
+    rejects a handler with the wrong shape at registration time.
+    """
 
     def __init__(self) -> None:
-        self._handlers: dict[str, ToolHandler] = {}
+        self._handlers: dict[str, ToolHandler[ContextT, RunT, StepT, ProfileT]] = {}
 
-    def register(self, step_type: str, handler: ToolHandler) -> None:
+    def register(
+        self, step_type: str, handler: ToolHandler[ContextT, RunT, StepT, ProfileT]
+    ) -> None:
         """Register a handler; a duplicate step type is a wiring bug and fails loudly."""
         if step_type in self._handlers:
             raise ValueError(f"Tool handler for {step_type!r} is already registered")
         self._handlers[step_type] = handler
 
-    def resolve(self, step_type: str) -> ToolHandler | None:
+    def resolve(self, step_type: str) -> ToolHandler[ContextT, RunT, StepT, ProfileT] | None:
         """The handler for ``step_type``, or None (dispatcher fails the step honestly)."""
         return self._handlers.get(step_type)
 
