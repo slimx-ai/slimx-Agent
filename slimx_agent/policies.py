@@ -6,26 +6,31 @@
 * **Tool policy** (`required_grant` / `permission_block_reason` / `normalize_grants`):
   whether a step is *permitted at all* for a run, based on its per-run grant list.
 
-Moved verbatim from ControlRoom's ``services/agent/{approval_policy,tool_policy}.py``
-(Stage I); the host modules are re-export shims. Steps/runs are duck-typed (``.type``,
-``.requires_approval``, ``.allowed_tools_json``) so no ORM dependency exists here.
+ControlRoom's ``services/agent/{approval_policy,tool_policy}.py`` re-export this module. Steps
+and runs are read through :class:`~slimx_agent.store.StepView` / :class:`~slimx_agent.store.RunView`
+so no ORM dependency exists here. Stored grant and pre-approval values are untrusted: anything
+other than a list/tuple/set of strings grants nothing.
+
+Current policy semantics (recorded, not redesigned here): ``manual`` and
+``review_checkpoints`` share one predicate — review-recommended, planner-flagged, and hard-gated
+steps stop; auto-safe steps run. A strict approve-every-step policy would be a new, versioned
+product contract with a migration plan, not a silent reinterpretation of stored values.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 from slimx_agent.contracts import GRANTABLE_TOOLS
+from slimx_agent.store import RunView, StepView
 
 # Risk tiers.
 AUTO_SAFE = "auto_safe"
 REVIEW_RECOMMENDED = "review_recommended"
 HARD_GATED = "hard_gated"
 
-# Base tier per step type. Everything on the current allowlist is additive/non-destructive, so the
-# strongest tier used here is ``review_recommended`` (cost/fanout worth a checkpoint). Unknown types
-# fall back to ``review_recommended`` (conservative — surface it rather than silently auto-run).
+# Base tier per step type. Unknown types fall back to ``review_recommended``; they cannot
+# execute anyway, because no host registers a handler for a type outside the contract.
 _TIER_BY_TYPE: dict[str, str] = {
     "model_call": AUTO_SAFE,
     "rag_retrieve": AUTO_SAFE,
@@ -143,7 +148,7 @@ _REASON_BY_TYPE: dict[str, str] = {
 }
 
 
-def classify_step(step: Any) -> tuple[str, str]:
+def classify_step(step: StepView) -> tuple[str, str]:
     """Classify a step into a risk tier with a plain-language reason. Type-based and deterministic."""
     tier = _TIER_BY_TYPE.get(step.type, REVIEW_RECOMMENDED)
     reason = _REASON_BY_TYPE.get(step.type) or _REASON_BY_TIER[tier]
@@ -170,7 +175,8 @@ def requires_stop(
       ``auto_complete`` but still stops under ``review_checkpoints``/``manual``.
     * ``auto_complete`` — stops only for hard gates.
     * ``review_checkpoints`` — stops for review-recommended (or planner-flagged) steps.
-    * ``manual`` — stops for anything reviewable or planner-flagged (most conservative).
+    * ``manual`` — currently the same predicate as ``review_checkpoints``.
+    * any other policy string — treated like ``manual`` (conservative).
     """
     if classification == HARD_GATED:
         if not preapproved:
@@ -182,6 +188,16 @@ def requires_stop(
         return classification == REVIEW_RECOMMENDED or requires_approval
     # manual (and any unknown/other policy string → treat conservatively like manual)
     return classification == REVIEW_RECOMMENDED or requires_approval
+
+
+def normalize_preapproved(value: object) -> frozenset[str]:
+    """The pre-approvable step types a stored run value may clear — never anything else.
+
+    Only a list/tuple/set of strings counts (a junk string or mapping pre-approves nothing),
+    and membership is intersected with :data:`PREAPPROVABLE_STEP_TYPES`, so a stored value can
+    never lower the gate of a write, plugin, or device action.
+    """
+    return frozenset(_string_members(value) & PREAPPROVABLE_STEP_TYPES)
 
 
 # Capability class per step type — the read / external / write / persistent distinction the product
@@ -198,7 +214,11 @@ CAPABILITY_BY_TYPE: dict[str, str] = {
     "model_call": MODEL,
     "compare_models": MODEL,
     "create_synthesis": MODEL,
+    # The long-form composer is outline + per-section model calls.
+    "compose_report": MODEL,
     "rag_retrieve": READ,
+    # Knowledge Base retrieval is a local read, like rag_retrieve.
+    "knowledge_retrieve": READ,
     "attach_context": READ,
     "save_evidence": PERSISTENT,
     "web_search": EXTERNAL,
@@ -287,6 +307,7 @@ GRANT_LABELS: dict[str, str] = {
     "evidence_write": "Save notes & tags",
     "netops_read": "Network telemetry (read-only)",
     "netops_write": "Apply network changes",
+    "plugin_tools": "Trusted tool plugins",
     "data_read": "Data sources (read-only SQL)",
 }
 
@@ -296,13 +317,12 @@ def required_grant(step_type: str) -> str | None:
     return _GRANT_BY_TYPE.get(step_type)
 
 
-def granted_tools(run: Any) -> set[str]:
-    """The set of tool grants on a run. ``None`` (legacy) grants nothing optional."""
-    raw = run.allowed_tools_json or []
-    return {str(item) for item in raw if isinstance(item, str)}
+def granted_tools(run: RunView) -> set[str]:
+    """The set of tool grants on a run. ``None`` (legacy) or a malformed value grants nothing."""
+    return _string_members(run.allowed_tools_json)
 
 
-def permission_block_reason(step: Any, run: Any) -> str | None:
+def permission_block_reason(step: StepView, run: RunView) -> str | None:
     """Why ``step`` is not permitted for ``run``, or ``None`` if it is.
 
     Returns ``None`` for any step needing no grant (all core assisted/build steps). For a gated step,
@@ -335,3 +355,10 @@ def normalize_grants(raw: Iterable[str] | None) -> list[str] | None:
             seen.add(key)
             out.append(key)
     return out
+
+
+def _string_members(value: object) -> set[str]:
+    """The string members of a stored list-like value; anything else contributes nothing."""
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return set()
+    return {item for item in value if isinstance(item, str)}

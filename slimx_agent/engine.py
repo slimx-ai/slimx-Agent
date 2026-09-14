@@ -1,32 +1,55 @@
-"""The agent run engine: the deliberately boring dispatch loop, extracted from ControlRoom.
+"""The agent run engine: the deliberately boring dispatch loop.
 
 For each runnable step it applies the tool-permission gate (ungranted tools skip honestly),
 the deterministic approval gate (hard gates stop even in Auto-complete), dispatches through
 the :class:`~slimx_agent.tools.ToolRegistry` (the ONLY path to a tool implementation),
 persists transitions through a :class:`~slimx_agent.store.RunStore`, and emits the durable
-event vocabulary from :mod:`slimx_agent.contracts`. Semantics preserved verbatim from the
-host implementation (Stage I): gate ordering (permission BEFORE approval), fresh run
-re-reads so mid-run pause/cancel/policy changes are honored (including during the LAST
-step), legacy ``approval_policy IS NULL`` behavior, and event payload shapes.
+event vocabulary from :mod:`slimx_agent.contracts`. Invariants hosts rely on: gate ordering
+(permission BEFORE approval), fresh run re-reads so mid-run pause/cancel/policy changes are
+honored (including during the LAST step), legacy ``approval_policy IS NULL`` behavior, event
+payload shapes, and no terminal step state without an authoritative outcome — a prepared
+action generation re-enters the gates, an unknown outcome ends the drive untouched, and a step
+in an unrecognized status is refused rather than dispatched ungated.
 
 The engine holds no model transport, no persistence, and no host capabilities — hosts
 provide those via the registry's handlers (which receive ``store.handler_context``), and may
 observe run completion/failure through ``on_run_end`` (e.g. ControlRoom's bounded
-auto-iterate epilogue).
+auto-iterate epilogue). It never retries a step on its own.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
-from typing import Any
+from collections.abc import Callable, Iterator, Sequence
 
-from slimx_agent import contracts
-from slimx_agent import policies
-from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
+from slimx_agent import contracts, policies
+from slimx_agent.store import EventPayload, HostId, RunStore, RunView, StepView
+from slimx_agent.tools import (
+    StepActionPrepared,
+    StepExecutionError,
+    StepNotApplicable,
+    StepOutcomeUnknown,
+    ToolRegistry,
+)
 
 # Run statuses a run cannot transition out of.
 TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
+
+
+class UnknownStepStatus(RuntimeError):
+    """A host step's status is outside :data:`~slimx_agent.contracts.STEP_STATUSES`.
+
+    The gates key on exact statuses, so the engine refuses such a step instead of dispatching it
+    ungated, and ends the drive without writing anything for it. The host owns the repair.
+    """
+
+    def __init__(self, step_id: HostId, status: str) -> None:
+        super().__init__(
+            f"step {step_id!r} has unrecognized status {str(status)[:64]!r}; it was not dispatched"
+        )
+        self.step_id = step_id
+        self.status = status
+
 
 # Monotonic clock for the wall budget, as a module alias so tests can stub it.
 _now = time.monotonic
@@ -34,43 +57,47 @@ _now = time.monotonic
 # ``on_run_end(run, status)`` — called once when the loop finishes a run as "completed" or
 # "failed" (after the terminal event is appended, before the final drain, so anything the
 # hook appends still reaches a live stream). Never called for pause/cancel: those are user
-# decisions the host must not auto-extend.
-RunEndHook = Callable[[Any, str], None]
+# decisions the host must not auto-extend. Never called when a drive ends on an unknown outcome.
+type RunEndHook[RunT] = Callable[[RunT, str], None]
+
+# What a drive yields: ``("event", payload)`` for each newly persisted durable event.
+type EngineEvent = tuple[str, EventPayload]
 
 
-def execute_run(
-    store: Any,
-    registry: ToolRegistry,
-    run: Any,
+def execute_run[RunT: RunView, StepT: StepView, ContextT, ProfileT](
+    store: RunStore[RunT, StepT, ContextT],
+    registry: ToolRegistry[ContextT, RunT, StepT, ProfileT],
+    run: RunT,
     *,
-    profile: Any,
-    on_run_end: RunEndHook | None = None,
-) -> Any:
+    profile: ProfileT,
+    on_run_end: RunEndHook[RunT] | None = None,
+) -> RunT:
     """Drive a run to its next stop (approval gate / pause / cancel / failure / completion).
 
     Thin drain of :func:`execute_run_events` so streaming and non-streaming execution share
-    ONE path."""
+    ONE path. Raises :class:`~slimx_agent.tools.StepOutcomeUnknown` when a step's outcome could
+    not be observed."""
     for _ in execute_run_events(store, registry, run, profile=profile, on_run_end=on_run_end):
         pass
     refreshed = store.get_run(run.id)
     return refreshed if refreshed is not None else run
 
 
-def execute_run_events(
-    store: Any,
-    registry: ToolRegistry,
-    run: Any,
+def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
+    store: RunStore[RunT, StepT, ContextT],
+    registry: ToolRegistry[ContextT, RunT, StepT, ProfileT],
+    run: RunT,
     *,
-    profile: Any,
-    on_run_end: RunEndHook | None = None,
-) -> Iterator[tuple[str, dict[str, Any]]]:
+    profile: ProfileT,
+    on_run_end: RunEndHook[RunT] | None = None,
+) -> Iterator[EngineEvent]:
     """Generator form of :func:`execute_run`: identical side effects, but yields each newly
     persisted progress event as ``("event", payload)`` so an SSE endpoint can stream live
     step progress. Events are tailed from a per-run sequence cursor, so the live stream and
     a polled timeline stay consistent."""
     cursor = store.next_sequence(run.id) - 1
 
-    def drain() -> Iterator[tuple[str, dict[str, Any]]]:
+    def drain() -> Iterator[EngineEvent]:
         nonlocal cursor
         for payload in store.drained_events(run.id, cursor):
             cursor = payload["sequence"]
@@ -86,7 +113,7 @@ def execute_run_events(
     # research_iterate plan extension — join this same drive: each pass re-reads the step list
     # and takes the first step that is not yet completed/skipped, exactly the order the old
     # snapshot loop executed. Termination is structural: run_step always leaves its step in a
-    # terminal state, so every pass either finishes one more step or exits.
+    # terminal state, re-parked at a gate, or raises — so every pass makes progress or exits.
     while True:
         current = store.get_run(run.id)
         if current is not None and current.status in ("paused", "cancelled"):
@@ -96,6 +123,10 @@ def execute_run_events(
         step = next((s for s in steps if s.status not in ("completed", "skipped")), None)
         if step is None:
             break  # every step is done — fall through to the completion block
+        if step.status not in contracts.STEP_STATUSES:
+            # Fail closed: every gate below keys on exact statuses, so an unrecognized one would
+            # otherwise reach dispatch with neither the permission nor the approval gate applied.
+            raise UnknownStepStatus(step.id, step.status)
         if step.status == "failed":
             store.set_run_status(run, "failed")
             yield from drain()
@@ -114,8 +145,9 @@ def execute_run_events(
             return
         # Tool-permission gate — runs BEFORE the approval gate so an ungranted external tool
         # is skipped honestly rather than stopping the run for an approval it could never
-        # satisfy. The grant list is set at create time; the fresh run is authoritative.
-        if step.status in ("pending", "awaiting_approval"):
+        # satisfy. The fresh run's grants are authoritative, and an already-approved step is
+        # re-checked too: approval never bypasses a grant that is missing or was revoked.
+        if step.status in ("pending", "awaiting_approval", "approved"):
             permit_reason = policies.permission_block_reason(step, current or run)
             if permit_reason is not None:
                 _skip_step(store, run, step.id, step.type, permit_reason)
@@ -129,9 +161,10 @@ def execute_run_events(
         policy = current.approval_policy if current is not None else run.approval_policy
         auto_approve = current.auto_approve if current is not None else run.auto_approve
         # Scoped pre-approval (0.14): duck-typed run attribute, read fresh so a mid-run
-        # grant/revoke is honored on the very next step.
-        preapproved_tools = (
-            getattr(current if current is not None else run, "preapproved_tools", None) or ()
+        # grant/revoke is honored on the very next step. Normalized: only allowlisted
+        # read-only types in a real list can ever clear a gate.
+        preapproved_tools = policies.normalize_preapproved(
+            getattr(current if current is not None else run, "preapproved_tools", None)
         )
         if step.status in ("pending", "awaiting_approval"):
             classification, reason, stop = resolve_gate(
@@ -154,7 +187,7 @@ def execute_run_events(
             )
             if step.requires_approval or step.status == "awaiting_approval" or preapproved_gate:
                 store.set_step_state(step.id, "approved")
-                payload: dict[str, Any] = {"auto": True}
+                payload: dict[str, object] = {"auto": True}
                 if policy is not None:
                     payload |= {"policy": policy, "classification": classification}
                 if preapproved_gate:
@@ -165,6 +198,11 @@ def execute_run_events(
 
         ran = run_step(store, registry, run, step, profile=profile)
         yield from drain()
+        if ran.status == "awaiting_approval":
+            # A host-side two-stage action prepared a new generation while this handler was
+            # admitted. End this drive at the durable review boundary. A later drive re-reads the
+            # new action and applies normal manual/automatic policy, matching in-process parity.
+            return
         if ran.status == "failed":
             store.append_event(run.id, contracts.RUN_FAILED, step_id=ran.id, commit=False)
             store.set_run_status(run, "failed")
@@ -186,8 +224,16 @@ def execute_run_events(
     yield from drain()
 
 
-def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile: Any) -> Any:
-    """Execute one step. Always returns the step (status ``completed``/``failed``/``skipped``)."""
+def run_step[RunT: RunView, StepT: StepView, ContextT, ProfileT](
+    store: RunStore[RunT, StepT, ContextT],
+    registry: ToolRegistry[ContextT, RunT, StepT, ProfileT],
+    run: RunT,
+    step: StepT,
+    *,
+    profile: ProfileT,
+) -> StepT:
+    """Execute one step. Returns the step as ``completed``/``failed``/``skipped``, or re-read
+    at a gate after a prepared action; raises :class:`StepOutcomeUnknown` untouched."""
     step_id = step.id
     store.set_step_state(step_id, "running")
     store.append_event(run.id, contracts.STEP_STARTED, step_id=step_id, payload={"type": step.type})
@@ -198,25 +244,39 @@ def run_step(store: Any, registry: ToolRegistry, run: Any, step: Any, *, profile
 
     try:
         output_refs = handler(store.handler_context, run, step, profile)
+    except StepActionPrepared:
+        # The host committed a new action generation and re-parked the step. Re-read it rather
+        # than writing a false completed/skipped/failed state; the outer loop will apply policy
+        # to that exact prepared generation (automatic receipt or human gate).
+        fresh = store.get_step(step_id)
+        return fresh if fresh is not None else step
+    except StepOutcomeUnknown:
+        # No authoritative outcome reached the engine: write nothing terminal and retry nothing.
+        # Ending the drive leaves the step exactly where the host's durable records put it.
+        raise
     except StepNotApplicable as exc:
         return _skip_step(store, run, step_id, step.type, str(exc))
     except StepExecutionError as exc:
         return _fail_step(store, run, step_id, step.type, str(exc))
-    except Exception as exc:  # underlying service blew up — fail the step, not the request
+    except Exception as exc:  # noqa: BLE001 — service bugs fail the step, not the request
         store.rollback()
         return _fail_step(store, run, step_id, step.type, _short_error(exc))
 
-    fresh = store.set_step_state(step_id, "completed", error=None, output_refs=output_refs or None)
+    fresh_step = store.set_step_state(
+        step_id, "completed", error=None, output_refs=output_refs or None
+    )
     store.append_event(
         run.id,
         contracts.STEP_COMPLETED,
         step_id=step_id,
-        payload={"type": fresh.type, **(output_refs or {})},
+        payload={"type": fresh_step.type, **(output_refs or {})},
     )
-    return fresh
+    return fresh_step
 
 
-def _budget_exhausted_reason(run: Any, steps: list[Any], drive_started: float) -> str | None:
+def _budget_exhausted_reason(
+    run: RunView, steps: Sequence[StepView], drive_started: float
+) -> str | None:
     """Why the run's budget forbids executing the next step, or ``None`` while within budget.
 
     Budgets are duck-typed run attributes (see ``contracts.RUN_BUDGET_FIELDS``); absent/None/
@@ -237,11 +297,11 @@ def _budget_exhausted_reason(run: Any, steps: list[Any], drive_started: float) -
 
 
 def resolve_gate(
-    step: Any,
+    step: StepView,
     *,
     policy: str | None,
     auto_approve: bool,
-    preapproved_tools: Any = None,
+    preapproved_tools: object = None,
 ) -> tuple[str | None, str, bool]:
     """Decide whether execution stops at ``step``. Returns ``(classification, reason, stop)``.
 
@@ -249,31 +309,33 @@ def resolve_gate(
     clears them — byte-for-byte the old behavior. Otherwise the deterministic classifier +
     policy matrix in :mod:`slimx_agent.policies` decide. ``preapproved_tools`` (the run's
     duck-typed scoped pre-authorization, 0.14) downgrades an allowlisted read-only hard gate
-    — membership in ``policies.PREAPPROVABLE_STEP_TYPES`` is enforced here, so a stored value
-    outside the allowlist can never clear a gate."""
+    — :func:`policies.normalize_preapproved` enforces membership in
+    ``policies.PREAPPROVABLE_STEP_TYPES``, so a stored value outside the allowlist (or a junk
+    non-list value) can never clear a gate."""
     if policy is None:
         return None, "", bool(step.requires_approval) and not auto_approve
     classification, reason = policies.classify_step(step)
-    preapproved = (
-        step.type in policies.PREAPPROVABLE_STEP_TYPES
-        and step.type in (preapproved_tools or ())
-    )
+    preapproved = step.type in policies.normalize_preapproved(preapproved_tools)
     stop = policies.requires_stop(
         policy, classification, step.requires_approval, preapproved=preapproved
     )
     return classification, reason, stop
 
 
-def gate_for_approval(store: Any, run: Any, step: Any, *, reason: str = "") -> None:
+def gate_for_approval[RunT: RunView, StepT: StepView](
+    store: RunStore[RunT, StepT, object], run: RunT, step: StepT, *, reason: str = ""
+) -> None:
     """Park a step at the human gate and record why."""
     store.set_step_state(step.id, "awaiting_approval")
-    payload: dict[str, Any] = {"title": step.title}
+    payload: dict[str, object] = {"title": step.title}
     if reason:
         payload["reason"] = reason
     store.append_event(run.id, contracts.APPROVAL_REQUIRED, step_id=step.id, payload=payload)
 
 
-def _fail_step(store: Any, run: Any, step_id: Any, step_type: str, message: str) -> Any:
+def _fail_step[RunT: RunView, StepT: StepView](
+    store: RunStore[RunT, StepT, object], run: RunT, step_id: HostId, step_type: str, message: str
+) -> StepT:
     step = store.set_step_state(step_id, "failed", error=message)
     store.append_event(
         run.id,
@@ -284,7 +346,9 @@ def _fail_step(store: Any, run: Any, step_id: Any, step_type: str, message: str)
     return step
 
 
-def _skip_step(store: Any, run: Any, step_id: Any, step_type: str, reason: str) -> Any:
+def _skip_step[RunT: RunView, StepT: StepView](
+    store: RunStore[RunT, StepT, object], run: RunT, step_id: HostId, step_type: str, reason: str
+) -> StepT:
     step = store.set_step_state(step_id, "skipped", error=None)
     store.append_event(
         run.id,

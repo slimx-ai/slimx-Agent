@@ -1,29 +1,48 @@
-"""Planner schemas + validation (the portable planning layer).
+"""Portable planner schemas, repair, and validation.
 
-Kept in sync with ControlRoom's ``services/agent/schemas.py`` (minus the host-specific
-system-map inference) until the host consumes this module directly.
+This is the package's portable planning API. It is not ControlRoom's active planner:
+ControlRoom keeps its own host-owned schema, prompt, readiness-aware shortlisting, repair, and
+validation ceiling under ``services/agent/`` (see the host's architecture documentation).
+Unifying the two needs a shared, versioned plan-limit contract, so this module's
+:data:`MAX_STEPS` deliberately stays the portable default rather than mirroring a host value.
 
 Two shapes, on purpose:
 
 * ``SlimXAgentPlan`` / ``SlimXAgentPlanStep`` are plain dataclasses handed to SlimX's
   structured-output call (the same dataclass-schema convention as ``SlimXTagSuggestions``).
-  They shape what the model is asked to produce.
+  They shape what the model is asked to produce. Structured output declares exactly the
+  dataclass fields and copies only declared fields back, so every field the validated
+  :class:`AgentPlanStep` accepts is declared here too — otherwise a valid response would lose
+  its executable ``params`` and ``input_refs`` before validation ever saw them.
 * ``AgentPlan`` / ``AgentPlanStep`` are Pydantic models that *validate* the returned data
   dict before any row is created — structural safety, not prompt safety: an unknown step
   type, a missing field, or too many steps is rejected here, not trusted from the model.
+  Preserving ``params`` never authorizes a step: hosts still apply capability filtering,
+  per-tool validation, readiness, permission, and approval checks.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ValidationError, field_validator, model_validator
 
+from slimx_agent import policies
 from slimx_agent.contracts import ALLOWED_STEP_TYPES
 
-# Keep v0.1 plans short and reviewable. Tunable later.
+# The portable default ceiling: keep plans short and reviewable. Host planners may apply their
+# own validated ceiling; a shared limit contract is separate, versioned work.
 MAX_STEPS = 12
+
+# Step types the portable prompt never advertises, even when granted: they need structured
+# params a free-form plan cannot carry reliably (mcp_call, plugin_tool), must never be invented
+# by a model (netops writes), or need a run mode this prompt does not know (research_iterate).
+# They enter plans through templates or APIs instead.
+NEVER_ADVERTISED_STEP_TYPES: frozenset[str] = frozenset(
+    {"mcp_call", "plugin_tool", "netops_apply", "netops_auto_apply", "research_iterate"}
+)
 
 
 # --- Schema sent to SlimX structured output (dataclasses, like SlimXTagSuggestions) ---
@@ -42,6 +61,10 @@ class SlimXAgentPlanStep:
     instruction: str = ""
     expected_output: str = ""
     requires_approval: bool = False
+    # Executable step data (for example write_file's path/content or a check command) and
+    # references to earlier results. Optional with None defaults, matching AgentPlanStep.
+    params: dict[str, Any] | None = None
+    input_refs: dict[str, list[str]] | None = None
 
 
 @dataclass
@@ -73,7 +96,7 @@ class AgentPlanStep(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _model_steps_need_an_instruction(self) -> "AgentPlanStep":
+    def _model_steps_need_an_instruction(self) -> AgentPlanStep:
         # model_call / compare_models execute the instruction AS the prompt — an empty one is
         # guaranteed to fail at run time ("model_call requires an instruction"), so reject it
         # at plan time where the retry-with-feedback loop can get the model to fill it in.
@@ -114,7 +137,9 @@ def repair_plan_data(data: object) -> object:
     unchanged so ``validate_plan`` rejects it. Too-many-steps is deliberately NOT truncated here —
     that's left for ``validate_plan`` to reject so a retry-with-feedback can produce a shorter plan
     instead of silently dropping the tail. Keeps the strict validator as the real gate; this only
-    widens what a flaky local model can produce and still have accepted."""
+    widens what a flaky local model can produce and still have accepted. The caller's ``data`` is
+    never mutated: repairs build new mappings, and every other field (``params``/``input_refs``
+    included) passes through unchanged."""
     if not isinstance(data, dict):
         return data
     # Schema echo: small models sometimes return the SCHEMA (e.g. assumptions =
@@ -163,51 +188,43 @@ def validate_plan(data: object) -> AgentPlan:
         raise PlanValidationError(str(exc)) from exc
 
 
+def advertised_step_types(allowed_tools: Iterable[str] | None = None) -> tuple[str, ...]:
+    """The step types the portable prompt offers for a run with ``allowed_tools`` granted.
+
+    A type is advertised only when it is not in :data:`NEVER_ADVERTISED_STEP_TYPES` and its
+    required grant (``policies.required_grant``) is absent or granted — the same grant map the
+    engine's permission gate enforces, so the prompt never offers a step that would only be
+    skipped. Order follows ``ALLOWED_STEP_TYPES``."""
+    grants = {grant for grant in allowed_tools or () if isinstance(grant, str)}
+    advertised: list[str] = []
+    for step_type in ALLOWED_STEP_TYPES:
+        if step_type in NEVER_ADVERTISED_STEP_TYPES:
+            continue
+        grant = policies.required_grant(step_type)
+        if grant is None or grant in grants:
+            advertised.append(step_type)
+    return tuple(advertised)
+
+
 def build_planner_prompt(
     goal: str,
     *,
     feedback: str | None = None,
     review_context: str | None = None,
-    allowed_tools: list[str] | None = None,
+    allowed_tools: Iterable[str] | None = None,
     prior_results: bool = False,
     evidence_hint: str | None = None,
 ) -> str:
-    # Only the always-available assisted step types are advertised by default. web_search is an
-    # external tool; it is offered to the planner ONLY when the run granted it (else the executor would
-    # just skip a planned web_search, wasting a step) — and the "no external tools" instruction below is
-    # relaxed accordingly.
-    grants = set(allowed_tools or [])
+    # Only step types this run could actually execute are advertised: a grant-gated type is
+    # offered ONLY when the run granted it (else the executor would just skip it, wasting a
+    # step) — and the "no external tools" instruction below is relaxed accordingly.
+    grants = {grant for grant in allowed_tools or () if isinstance(grant, str)}
     web_search_granted = "web_search" in grants
     code_read_granted = "code_read" in grants
     spawn_granted = "spawn_agents" in grants
     evidence_write_granted = "evidence_write" in grants
     netops_granted = "netops_read" in grants
-    data_granted = "data_read" in grants
-    _gated_out = set()
-    if not web_search_granted:
-        _gated_out.add("web_search")
-    if not code_read_granted:
-        _gated_out |= {"code_search", "code_read"}
-    if not spawn_granted:
-        _gated_out |= {"spawn_run", "join_runs"}
-    if not evidence_write_granted:
-        _gated_out |= {"create_note", "add_tag"}
-    if not netops_granted:
-        _gated_out.add("netops_collect")
-    if not data_granted:
-        _gated_out |= {"data_catalog", "data_query", "analyze_data"}
-    # mcp_call is never advertised to the planner: it needs structured params (connector_id/
-    # tool/arguments) the plan schema cannot carry reliably — it enters plans via templates or
-    # the API, and the executor honestly skips a bare planner-emitted one.
-    _gated_out.add("mcp_call")
-    # research_iterate is advertised only for research-mode runs; this portable prompt has no
-    # mode, so it never advertises it (hosts pass a mode-aware advertised set instead).
-    _gated_out.add("research_iterate")
-    # NetOps write steps are never advertised either: a device change must not be invented by the
-    # planner. They enter via a template/API with structured params, hard-gated for approval.
-    _gated_out |= {"netops_apply", "netops_auto_apply"}
-    advertised = [t for t in ALLOWED_STEP_TYPES if t not in _gated_out]
-    allowed = ", ".join(advertised)
+    allowed = ", ".join(advertised_step_types(grants))
     prompt = (
         "You plan a short, supervised AI workflow. Output JSON ONLY, matching the schema, with "
         "2 to 5 steps. Return concrete VALUES — never the schema/type definitions themselves. "
@@ -341,8 +358,9 @@ def build_self_check_prompt(goal: str, result_text: str) -> str:
 # --- Research checkpoint (deep-research loop, 0.9) -------------------------------------------
 # Defaulted dataclass for the structured verdict a research_iterate step produces: the ledger
 # update (findings / open questions / contradictions) plus the plan extension (next_steps, same
-# shape as plan steps). Defaults everywhere so weak local models construct; ``satisfied=True``
-# is the fail-safe — a malformed verdict records nothing and extends nothing.
+# shape as plan steps — so they carry params/input_refs too). Defaults everywhere so weak local
+# models construct; ``satisfied=True`` is the fail-safe — a malformed verdict records nothing
+# and extends nothing.
 
 
 @dataclass

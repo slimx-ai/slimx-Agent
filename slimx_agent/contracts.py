@@ -183,6 +183,14 @@ ALLOWED_STEP_TYPES: tuple[str, ...] = (
     + DATA_STEP_TYPES
 )
 
+# --------------------------------------------------------------------------- step statuses
+# The closed step-status vocabulary the engine understands. The permission and approval gates
+# key on these exact values, so a step in any other status is refused (``UnknownStepStatus``)
+# instead of reaching dispatch ungated, and the standalone store refuses such a snapshot.
+STEP_STATUSES: frozenset[str] = frozenset(
+    {"pending", "awaiting_approval", "approved", "running", "completed", "failed", "skipped"}
+)
+
 # --------------------------------------------------------------------------- run budgets
 # Engine-enforced run budgets (0.9). Duck-typed run attributes, all optional — an absent or
 # ``None`` field means unbounded, so pre-budget hosts and legacy rows are byte-for-byte

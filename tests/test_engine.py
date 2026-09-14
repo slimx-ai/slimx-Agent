@@ -6,9 +6,17 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from slimx_agent import contracts, engine
 from slimx_agent.store import UNSET
-from slimx_agent.tools import StepExecutionError, StepNotApplicable, ToolRegistry
+from slimx_agent.tools import (
+    StepActionPrepared,
+    StepExecutionError,
+    StepNotApplicable,
+    StepOutcomeUnknown,
+    ToolRegistry,
+)
 
 
 @dataclass
@@ -148,6 +156,25 @@ def test_hard_gate_parks_even_in_auto_complete_and_resumes_after_approval():
     assert store.steps[0].status == "completed"
 
 
+def test_the_step_status_vocabulary_is_closed_and_exact():
+    assert contracts.STEP_STATUSES == frozenset(
+        {"pending", "awaiting_approval", "approved", "running", "completed", "failed", "skipped"}
+    )
+
+
+@pytest.mark.parametrize("status", ["queued", "Pending", "prepared", "cancelled", ""])
+def test_an_unrecognized_step_status_is_refused_not_dispatched_past_the_gates(status):
+    # An ungranted, hard-gated tool: a status that slipped past both gates would dispatch it.
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=None), [FakeStep("s1", "web_search", status=status)]
+    )
+    with pytest.raises(engine.UnknownStepStatus) as caught:
+        engine.execute_run(store, _registry(), store.run, profile=object())
+    assert caught.value.step_id == "s1"
+    assert store.steps[0].status == status
+    assert store.events == []
+
+
 def test_legacy_policy_honors_planner_flag_and_auto_approve():
     gated = FakeStep("s1", "model_call", requires_approval=True)
     store = MemoryStore(FakeRun("r", approval_policy=None), [gated])
@@ -199,6 +226,38 @@ def test_not_applicable_skips_and_the_run_continues():
     run = engine.execute_run(store, registry, store.run, profile=object())
     assert run.status == "completed"
     assert store.steps[0].status == "skipped"
+
+
+def test_prepared_action_stops_cleanly_and_next_drive_applies_policy():
+    calls = 0
+    store = MemoryStore(
+        FakeRun("r", approval_policy="auto_complete"),
+        [FakeStep("s1", "model_call", status="approved", requires_approval=True)],
+    )
+
+    def prepare(ctx, run, step, profile):
+        nonlocal calls
+        calls += 1
+        step.status = "awaiting_approval"
+        step.requires_approval = False
+        store.run.status = "awaiting_approval"
+        raise StepActionPrepared("candidate ready")
+
+    engine.execute_run(store, _registry(prepare), store.run, profile=object())
+
+    assert calls == 1
+    assert store.run.status == "awaiting_approval"
+    assert store.steps[0].status == "awaiting_approval"
+    assert contracts.STEP_COMPLETED not in _types(store)
+    assert contracts.STEP_FAILED not in _types(store)
+    assert contracts.STEP_SKIPPED not in _types(store)
+    assert contracts.APPROVAL_GRANTED not in _types(store)
+
+    store.set_run_status(store.run, "planned")
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "completed"
+    assert store.steps[0].status == "completed"
+    assert contracts.APPROVAL_GRANTED in _types(store)
 
 
 def test_cancel_during_the_last_step_is_not_overwritten_by_completion():
@@ -345,9 +404,7 @@ def test_preapproved_web_search_clears_the_hard_gate_with_an_audited_grant():
     class PreapprovedRun(FakeRun):
         preapproved_tools: list[str] | None = None
 
-    run = PreapprovedRun(
-        "r", allowed_tools_json=["web_search"], preapproved_tools=["web_search"]
-    )
+    run = PreapprovedRun("r", allowed_tools_json=["web_search"], preapproved_tools=["web_search"])
     store = MemoryStore(run, [FakeStep("s1", "web_search"), FakeStep("s2", "model_call")])
     engine.execute_run(store, _registry(), store.run, profile=object())
     assert store.run.status == "completed"
@@ -384,9 +441,7 @@ def test_preapproval_allowlist_is_enforced_in_the_engine():
 
     registry = ToolRegistry()
     registry.register("mcp_call", lambda ctx, run, step, profile: {"ok": True})
-    run = PreapprovedRun(
-        "r", allowed_tools_json=["mcp_tools"], preapproved_tools=["mcp_call"]
-    )
+    run = PreapprovedRun("r", allowed_tools_json=["mcp_tools"], preapproved_tools=["mcp_call"])
     store = MemoryStore(run, [FakeStep("s1", "mcp_call")])
     engine.execute_run(store, registry, store.run, profile=object())
     # Parked at the gate (or skipped by the permission gate) — never auto-run.
@@ -396,3 +451,314 @@ def test_preapproval_allowlist_is_enforced_in_the_engine():
         for e in store.events
         if e["type"] == contracts.APPROVAL_GRANTED
     )
+
+
+# --- 0.20: grants at dispatch, prepared generations, races, and unknown outcomes ---------
+
+_TERMINAL_STEP_EVENTS = {contracts.STEP_COMPLETED, contracts.STEP_FAILED, contracts.STEP_SKIPPED}
+
+
+def _counting_registry(step_type: str, handler):
+    registry = ToolRegistry()
+    registry.register(step_type, handler)
+    return registry
+
+
+def test_approved_step_whose_grant_was_revoked_is_skipped_not_dispatched():
+    """Approval never bypasses a missing grant: the permission gate re-checks an already
+    approved step against the fresh run before dispatch."""
+    calls: list[str] = []
+    registry = _counting_registry("mcp_call", lambda c, r, s, p: calls.append(s.id) or {})
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=[]), [FakeStep("s1", "mcp_call", status="approved")]
+    )
+    engine.execute_run(store, registry, store.run, profile=object())
+    assert calls == []
+    assert store.steps[0].status == "skipped"
+    assert contracts.APPROVAL_REQUIRED not in _types(store)
+    skipped = next(e for e in store.events if e["type"] == contracts.STEP_SKIPPED)
+    assert "Connector tools (MCP)" in skipped["payload_json"]["reason"]
+
+
+def test_approved_step_that_keeps_its_grant_runs_without_re_gating():
+    calls: list[str] = []
+    registry = _counting_registry("mcp_call", lambda c, r, s, p: calls.append(s.id) or {})
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=["mcp_tools"]),
+        [FakeStep("s1", "mcp_call", status="approved")],
+    )
+    engine.execute_run(store, registry, store.run, profile=object())
+    assert calls == ["s1"]
+    assert store.steps[0].status == "completed"
+    assert contracts.APPROVAL_REQUIRED not in _types(store)
+
+
+@pytest.mark.parametrize("policy", [None, "manual", "review_checkpoints", "auto_complete"])
+def test_permission_gate_precedes_approval_under_every_policy(policy):
+    store = MemoryStore(
+        FakeRun("r", approval_policy=policy, allowed_tools_json=None),
+        [FakeStep("s1", "mcp_call", requires_approval=True)],
+    )
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.steps[0].status == "skipped"
+    assert contracts.APPROVAL_REQUIRED not in _types(store)
+
+
+def test_a_junk_string_preapproval_never_clears_a_hard_gate():
+    run = FakeRun("r", allowed_tools_json=["web_search"])
+    run.preapproved_tools = "web_search"  # a string, not a list: grants no pre-approval
+    store = MemoryStore(run, [FakeStep("s1", "web_search")])
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "awaiting_approval"
+    assert not any(
+        (e["payload_json"] or {}).get("preapproved")
+        for e in store.events
+        if e["type"] == contracts.APPROVAL_GRANTED
+    )
+
+
+def test_a_prepared_generation_never_reuses_the_earlier_approval():
+    """The earlier generation was approved; preparing a new one re-parks it as pending, and the
+    same drive re-applies the hard gate to it instead of dispatching on the old approval."""
+    calls = 0
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=["mcp_tools"]),
+        [FakeStep("s1", "mcp_call", status="approved")],
+    )
+
+    def prepare(ctx, run, step, profile):
+        nonlocal calls
+        calls += 1
+        store.steps[0].status = "pending"
+        raise StepActionPrepared("new action generation")
+
+    engine.execute_run(store, _counting_registry("mcp_call", prepare), store.run, profile=object())
+    assert calls == 1
+    assert store.steps[0].status == "awaiting_approval"
+    assert store.run.status == "awaiting_approval"
+    types = _types(store)
+    assert types.count(contracts.APPROVAL_REQUIRED) == 1
+    assert not (_TERMINAL_STEP_EVENTS | {contracts.APPROVAL_GRANTED}) & set(types)
+
+
+@pytest.mark.parametrize(
+    ("policy", "initial_status", "expected_calls", "expected_status"),
+    [
+        ("auto_complete", "pending", 2, "completed"),
+        ("manual", "approved", 1, "awaiting_approval"),
+        ("review_checkpoints", "approved", 1, "awaiting_approval"),
+    ],
+)
+def test_prepared_file_work_continues_only_where_policy_allows(
+    policy, initial_status, expected_calls, expected_status
+):
+    calls = 0
+    store = MemoryStore(
+        FakeRun("r", approval_policy=policy),
+        [FakeStep("s1", "write_file", status=initial_status)],
+    )
+
+    def two_stage(ctx, run, step, profile):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            store.steps[0].status = "pending"
+            raise StepActionPrepared("content prepared")
+        return {"path": "index.html"}
+
+    engine.execute_run(
+        store, _counting_registry("write_file", two_stage), store.run, profile=object()
+    )
+    assert calls == expected_calls
+    assert store.steps[0].status == expected_status
+    assert _types(store).count(contracts.STEP_COMPLETED) == (expected_calls - 1)
+
+
+def test_pause_between_preparation_and_dispatch_is_honored():
+    calls = 0
+    store = MemoryStore(FakeRun("r"), [FakeStep("s1", "write_file")])
+
+    def prepare_then_pause(ctx, run, step, profile):
+        nonlocal calls
+        calls += 1
+        store.steps[0].status = "pending"
+        store.run.status = "paused"
+        raise StepActionPrepared("prepared while the user paused")
+
+    ends: list[str] = []
+    engine.execute_run(
+        store,
+        _counting_registry("write_file", prepare_then_pause),
+        store.run,
+        profile=object(),
+        on_run_end=lambda r, s: ends.append(s),
+    )
+    assert calls == 1
+    assert store.run.status == "paused"
+    assert store.steps[0].status == "pending"
+    assert not _TERMINAL_STEP_EVENTS & set(_types(store))
+    assert ends == []
+
+
+def test_pause_during_the_last_step_is_not_overwritten_by_completion():
+    store = MemoryStore(FakeRun("r"), [FakeStep("s1", "model_call")])
+
+    def pausing(ctx, run, step, profile):
+        store.run.status = "paused"
+        return {"ref": "r1"}
+
+    ends: list[str] = []
+    engine.execute_run(
+        store,
+        _registry(pausing),
+        store.run,
+        profile=object(),
+        on_run_end=lambda r, s: ends.append(s),
+    )
+    assert store.steps[0].status == "completed"
+    assert store.run.status == "paused"
+    assert contracts.RUN_COMPLETED not in _types(store)
+    assert ends == []
+
+
+@dataclass
+class PauseAfterLoopRead(MemoryStore):
+    """A pause that lands after the loop's last run read but before the completion read."""
+
+    reads: int = 0
+
+    def get_run(self, run_id):
+        self.reads += 1
+        if self.reads == 3:  # 1: first loop pass, 2: loop pass that finds no step, 3: final
+            self.run.status = "paused"
+        return super().get_run(run_id)
+
+
+def test_a_pause_landing_after_the_last_loop_read_is_still_honored():
+    store = PauseAfterLoopRead(FakeRun("r"), [FakeStep("s1", "model_call")])
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.steps[0].status == "completed"
+    assert store.run.status == "paused"
+    assert contracts.RUN_COMPLETED not in _types(store)
+
+
+def test_an_unknown_outcome_ends_the_drive_without_terminal_writes_or_retry():
+    calls = 0
+
+    def unobserved(ctx, run, step, profile):
+        nonlocal calls
+        calls += 1
+        raise StepOutcomeUnknown("the invocation response was lost")
+
+    store = MemoryStore(FakeRun("r"), [FakeStep("s1", "model_call"), FakeStep("s2", "model_call")])
+    ends: list[str] = []
+    with pytest.raises(StepOutcomeUnknown):
+        engine.execute_run(
+            store,
+            _registry(unobserved),
+            store.run,
+            profile=object(),
+            on_run_end=lambda r, s: ends.append(s),
+        )
+    assert calls == 1
+    assert [s.status for s in store.steps] == ["running", "pending"]
+    assert store.steps[0].error is None
+    assert _types(store) == [contracts.STEP_STARTED]
+    assert store.run.status == "running"
+    assert store.rollbacks == 0
+    assert ends == []
+
+
+def test_a_run_with_an_earlier_failed_step_is_marked_failed_on_the_next_drive():
+    """Recorded legacy behavior: no handler runs, no second RUN_FAILED event is appended, and
+    the epilogue does not fire again."""
+    calls: list[str] = []
+    store = MemoryStore(
+        FakeRun("r"),
+        [
+            FakeStep("s1", "model_call", status="completed"),
+            FakeStep("s2", "model_call", status="failed"),
+            FakeStep("s3", "model_call"),
+        ],
+    )
+    ends: list[str] = []
+    engine.execute_run(
+        store,
+        _registry(lambda c, r, s, p: calls.append(s.id) or {}),
+        store.run,
+        profile=object(),
+        on_run_end=lambda r, s: ends.append(s),
+    )
+    assert store.run.status == "failed"
+    assert calls == [] and ends == []
+    assert _types(store) == []
+
+
+def test_an_awaiting_step_is_auto_approved_after_a_mid_run_policy_change():
+    store = MemoryStore(
+        FakeRun("r", approval_policy="auto_complete"),
+        [FakeStep("s1", "compare_models", status="awaiting_approval")],
+    )
+    registry = _counting_registry("compare_models", lambda c, r, s, p: {"ok": True})
+    engine.execute_run(store, registry, store.run, profile=object())
+    granted = next(e for e in store.events if e["type"] == contracts.APPROVAL_GRANTED)
+    assert granted["payload_json"] == {
+        "auto": True,
+        "policy": "auto_complete",
+        "classification": "review_recommended",
+    }
+    assert store.steps[0].status == "completed"
+
+
+@dataclass
+class RefusingReentryStore(MemoryStore):
+    """A host that refuses to re-enter a step whose earlier attempt may have crossed its entry
+    boundary — the obligation ``RunStore.set_step_state`` documents for ``running``."""
+
+    def set_step_state(self, step_id, status, *, error=UNSET, output_refs=UNSET):
+        current = self.get_step(step_id)
+        if status == "running" and current is not None and current.status == "running":
+            raise RuntimeError("the earlier attempt already crossed the host entry boundary")
+        return super().set_step_state(step_id, status, error=error, output_refs=output_refs)
+
+
+def test_an_interrupted_running_step_is_re_entered_only_through_the_running_transition():
+    """Recorded contract: the engine has no ledger, so it delegates the at-most-once decision
+    for a step an interrupted drive left ``running`` to the store's ``running`` transition. A
+    refusal propagates before the handler runs and before any other write."""
+    calls: list[str] = []
+    store = RefusingReentryStore(FakeRun("r"), [FakeStep("s1", "model_call", status="running")])
+    with pytest.raises(RuntimeError, match="entry boundary"):
+        engine.execute_run(
+            store,
+            _registry(lambda c, r, s, p: calls.append(s.id) or {}),
+            store.run,
+            profile=object(),
+        )
+    assert calls == []
+    assert store.events == []
+    assert store.steps[0].status == "running"
+
+    # A host that knows the earlier attempt never entered (no ledger row) may allow it: the
+    # step is dispatched exactly once more.
+    permissive = MemoryStore(FakeRun("r"), [FakeStep("s1", "model_call", status="running")])
+    engine.execute_run(
+        permissive,
+        _registry(lambda c, r, s, p: calls.append(s.id) or {}),
+        permissive.run,
+        profile=object(),
+    )
+    assert calls == ["s1"]
+    assert permissive.steps[0].status == "completed"
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_step_status"),
+    [("auto_complete", "failed"), ("manual", "awaiting_approval")],
+)
+def test_an_unknown_step_type_cannot_execute(policy, expected_step_status):
+    store = MemoryStore(FakeRun("r", approval_policy=policy), [FakeStep("s1", "rm_rf")])
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.steps[0].status == expected_step_status
+    if expected_step_status == "failed":
+        assert "Unsupported step type 'rm_rf'" in (store.steps[0].error or "")

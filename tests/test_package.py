@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ast
+import importlib
 import inspect
+import sys
 import uuid
 
 import pytest
@@ -44,9 +47,14 @@ def test_contracts_vocabulary_is_coherent():
     }
     assert "netops_collect" in ALLOWED_STEP_TYPES
     assert {"netops_apply", "netops_auto_apply"} <= set(ALLOWED_STEP_TYPES)
-    assert {"propose_patch", "apply_patch_sandbox", "run_check", "package_patch", "stage_files", "review_patch"} <= set(
-        ALLOWED_STEP_TYPES
-    )
+    assert {
+        "propose_patch",
+        "apply_patch_sandbox",
+        "run_check",
+        "package_patch",
+        "stage_files",
+        "review_patch",
+    } <= set(ALLOWED_STEP_TYPES)
     assert "research_iterate" in ALLOWED_STEP_TYPES
     assert {"data_catalog", "data_query", "analyze_data"} <= set(ALLOWED_STEP_TYPES)
     assert len(EVENT_TYPES) == len(set(EVENT_TYPES)) == 28
@@ -191,14 +199,43 @@ def test_evidence_write_step_types_are_grant_gated_review_recommended():
         assert policies.permission_block_reason(step, granted) is None
 
 
-def test_contracts_and_tools_and_runtime_are_stdlib_only():
-    """The move-verbatim guarantee: no third-party imports in the core three modules."""
-    for module_name in ("contracts", "tools", "runtime"):
-        module = __import__(f"slimx_agent.{module_name}", fromlist=[module_name])
-        source = inspect.getsource(module)
-        for forbidden in ("pydantic", "sqlmodel", "fastapi", "sqlalchemy", "httpx", "slimx"):
-            assert f"import {forbidden}" not in source, (module_name, forbidden)
-            assert f"from {forbidden}" not in source, (module_name, forbidden)
+def _module_level_imports(module_name: str) -> set[str]:
+    """Top-level package names imported at module level (lazy imports inside functions are
+    deliberately excluded: host_client imports httpx only when it builds a real client)."""
+    module = importlib.import_module(f"slimx_agent.{module_name}")
+    names: set[str] = set()
+    for node in ast.parse(inspect.getsource(module)).body:
+        if isinstance(node, ast.Import):
+            names |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+@pytest.mark.parametrize(
+    ("module_name", "third_party"),
+    [
+        ("contracts", set()),
+        ("tools", set()),
+        ("runtime", set()),
+        ("store", set()),
+        ("policies", set()),
+        ("engine", set()),
+        ("host_client", set()),
+        ("http_store", set()),
+        ("http_tools", set()),
+        ("planning", {"pydantic"}),
+        ("service", {"fastapi", "pydantic"}),
+    ],
+)
+def test_module_level_imports_stay_within_their_dependency_tier(module_name, third_party):
+    """Core modules import only the standard library and this package, so every host can use
+    the vocabulary, policies, and engine without the ``service`` extra. The allowlist is exact:
+    a new module-level dependency anywhere must be a deliberate, reviewed change here."""
+    allowed = set(sys.stdlib_module_names) | {"slimx_agent", "__future__"} | third_party
+    imported = _module_level_imports(module_name)
+    assert imported <= allowed, (module_name, imported - allowed)
+    assert third_party <= imported, (module_name, third_party - imported)
 
 
 def test_no_agent_frameworks_anywhere():
@@ -227,6 +264,21 @@ def test_agent_run_context_defaults_empty():
     context = AgentRunContext()
     assert context.reference_text == ""
     assert context.manifest == []
+    assert context.is_empty and not AgentRunContext("reference").is_empty
+
+
+def test_unset_is_a_named_singleton_distinct_from_none():
+    from slimx_agent.store import UNSET, UnsetType
+
+    assert UNSET is UnsetType.UNSET
+    assert UNSET is not None and repr(UNSET) == "UNSET"
+
+
+def test_registry_reports_its_registered_step_types_in_order():
+    registry = ToolRegistry()
+    registry.register("model_call", lambda *args: {})
+    registry.register("rag_retrieve", lambda *args: {})
+    assert registry.step_types == ("model_call", "rag_retrieve")
 
 
 def test_planning_validate_and_repair_roundtrip():
@@ -277,8 +329,13 @@ def test_runtime_protocol_shape():
     assert hasattr(AgentRuntime, "plan_run")
 
 
-def test_version():
-    assert slimx_agent.__version__ == "0.16.0"
+def test_version_is_one_identity_across_source_and_installed_metadata():
+    """The runtime ``__version__`` is the single maintained source; installed distribution
+    metadata is derived from it at build time and must agree (tests/test_release_identity.py
+    covers the wheel, health endpoint, and changelog)."""
+    from importlib.metadata import version
+
+    assert version("slimx-agent") == slimx_agent.__version__
 
 
 def test_run_id_types_are_uuid_friendly():

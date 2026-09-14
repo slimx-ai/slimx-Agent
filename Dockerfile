@@ -1,6 +1,7 @@
 # The standalone SlimX-Agent service: the agent engine loop in its own container.
 # No database, no provider credentials, no host code — it talks only to the host's
 # internal agent-host callback API (SLIMX_AGENT_HOST_URL + SLIMX_AGENT_INTERNAL_TOKEN).
+# /internal/run-check stays absent unless SLIMX_AGENT_ENABLE_RUN_CHECK is set.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+# LICENSE is part of the distribution metadata (pyproject license-files).
+COPY pyproject.toml README.md LICENSE ./
 COPY slimx_agent ./slimx_agent
 RUN pip install --no-cache-dir ".[service]"
 
