@@ -69,4 +69,4 @@ __all__ = [
 
 # The single maintained version source: pyproject reads it at build time
 # (``[tool.setuptools.dynamic]``), and the health endpoint reports it.
-__version__ = "0.20.0"
+__version__ = "0.21.0"
