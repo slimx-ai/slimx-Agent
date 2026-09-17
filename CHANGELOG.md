@@ -43,6 +43,18 @@ exactly as 0.20.0.
   *Migration:* none. A host sees fewer budget pauses, and only on runs that had nothing left to
   execute.
 
+### Approval copy
+
+- **Approval reasons now describe the step they stop.** `policies.classify_step` used the model
+  fan-out sentence ("Runs several models (slower/costlier and may use extra providers)…") as the
+  default for the whole `review_recommended` tier, so the `agent.approval.required` event told
+  users that a note, a task, a sandbox write, a data query or a device read runs several models.
+  The tier default is now neutral, and every `review_recommended` and `hard_gated` contract type
+  has its own reason. Only `compare_models` and `join_runs` mention model fan-out. Tiers, grants,
+  stop decisions and the event shape are unchanged; only the `reason` text differs.
+  *Migration:* a host or UI test that asserts on the old sentence for a type other than
+  `compare_models` must be updated.
+
 ## 0.20.0 — unreleased (not tagged or published)
 
 A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits

@@ -115,6 +115,74 @@ def test_the_reviewed_table_covers_exactly_the_contract_vocabulary():
     assert set(STOP_TABLE) == set(APPROVAL_POLICIES)
 
 
+# What the approval gate may tell a user about each gated type: words its reason must contain,
+# reviewed against the type's description in ``contracts.py``. Auto-safe types keep the tier text.
+REVIEWED_REASON_WORDS: dict[str, tuple[str, ...]] = {
+    "compare_models": ("several models",),
+    "join_runs": ("sub-agents", "model calls"),
+    "create_note": ("note", "this project", "reversible"),
+    "add_tag": ("label", "this project", "reversible"),
+    "create_work_item": ("task", "this project", "reversible"),
+    "link_work_item": ("task", "this project", "reversible"),
+    "promote_to_knowledge": ("Knowledge Base", "reversible"),
+    "write_file": ("file", "sandboxed workspace"),
+    "package_artifact": ("workspace files", "artifact"),
+    "apply_patch_sandbox": ("patch", "sandbox"),
+    "run_check": ("allowlisted check command", "sandbox"),
+    "netops_collect": ("network telemetry", "read-only"),
+    "data_catalog": ("tables and columns", "read-only"),
+    "data_query": ("read-only query", "data source"),
+    "netops_auto_apply": ("network device", "rollback"),
+    "netops_apply": ("network device", "always requires approval"),
+    "mcp_call": ("connector tool", "always requires approval"),
+    "plugin_tool": ("plugin code", "always requires approval"),
+    "web_search": ("external web-search service", "always asks first"),
+    "web_fetch": ("public web page", "always asks first"),
+}
+MODEL_FAN_OUT_TYPES = {"compare_models", "join_runs"}
+
+
+def test_every_gated_type_has_a_reviewed_reason_of_its_own():
+    gated = {
+        step_type
+        for step_type, (tier, _grant) in EXPECTED.items()
+        if tier in (policies.REVIEW_RECOMMENDED, policies.HARD_GATED)
+    }
+    assert set(REVIEWED_REASON_WORDS) == gated
+    tier_defaults = set(policies._REASON_BY_TIER.values())
+    for step_type in sorted(gated):
+        _tier, reason = policies.classify_step(_step(step_type))
+        assert reason not in tier_defaults, step_type
+        for words in REVIEWED_REASON_WORDS[step_type]:
+            assert words in reason, (step_type, words)
+        assert reason == reason.strip() and len(reason) <= 200, step_type
+
+
+@pytest.mark.parametrize("step_type", ALLOWED_STEP_TYPES)
+def test_only_a_model_fan_out_is_described_as_running_several_models(step_type):
+    """BUG-05: the fan-out sentence was the default for every review-recommended type, so the
+    approval gate told users that a note, a data query or a device read "runs several models"."""
+    _tier, reason = policies.classify_step(_step(step_type))
+    describes_fan_out = "several models" in reason or "model calls" in reason
+    assert describes_fan_out == (step_type in MODEL_FAN_OUT_TYPES)
+    if step_type not in MODEL_FAN_OUT_TYPES:
+        assert "costlier" not in reason and "extra providers" not in reason
+
+
+def test_no_tier_default_describes_one_type():
+    for reason in policies._REASON_BY_TIER.values():
+        assert "models" not in reason and "provider" not in reason
+
+
+def test_the_approval_gate_shows_the_reason_of_the_type_it_stops():
+    """The reason reaches users through ``agent.approval.required``: pin it end to end."""
+    _classification, reason, stop = engine.resolve_gate(
+        _step("data_query"), policy="manual", auto_approve=False
+    )
+    assert stop is True
+    assert "read-only query" in reason and "several models" not in reason
+
+
 @pytest.mark.parametrize("step_type", ALLOWED_STEP_TYPES)
 def test_every_step_type_has_its_reviewed_tier_grant_and_capability(step_type):
     tier, grant = EXPECTED[step_type]

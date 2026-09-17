@@ -124,15 +124,21 @@ _TIER_BY_TYPE: dict[str, str] = {
     "compose_report": AUTO_SAFE,
 }
 
+# Tier defaults. They must be true of EVERY type in the tier, because ``classify_step`` shows
+# them at the approval gate. What a particular type does belongs in ``_REASON_BY_TYPE``.
 _REASON_BY_TIER: dict[str, str] = {
     AUTO_SAFE: "Additive, reversible step — runs automatically in Auto-complete.",
-    REVIEW_RECOMMENDED: (
-        "Runs several models (slower/costlier and may use extra providers) — a good place to review."
-    ),
+    REVIEW_RECOMMENDED: "A meaningful checkpoint — a good place to review before it runs.",
     HARD_GATED: "Safety checkpoint — always requires approval, even in Auto-complete.",
 }
 
-# A more specific reason than the generic tier text, where the step type warrants it.
+_FAN_OUT_REASON = (
+    "Runs several models (slower/costlier and may use extra providers) — a good place to review."
+)
+
+# What each gated type actually does, in the user's terms. Every ``review_recommended`` and
+# ``hard_gated`` contract type has an entry (tests/test_policy_matrix.py keeps it that way), so a
+# write, an external read and a model fan-out never share one sentence.
 _REASON_BY_TYPE: dict[str, str] = {
     "web_search": (
         "Sends your query to an external web-search service — always asks first, even in Auto-complete."
@@ -144,6 +150,67 @@ _REASON_BY_TYPE: dict[str, str] = {
     "research_iterate": (
         "Reviews findings and may extend the plan; every added step still passes the permission "
         "and approval gates."
+    ),
+    # Model fan-out: the only types the fan-out sentence is true of.
+    "compare_models": _FAN_OUT_REASON,
+    "join_runs": (
+        "Runs the spawned sub-agents, each its own series of model calls (slower/costlier) — "
+        "a good place to review."
+    ),
+    # Additive, reversible writes inside the active project.
+    "create_note": "Saves a note in this project — additive and reversible; review what it writes.",
+    "add_tag": (
+        "Adds a label to an existing highlight or comment in this project — additive and "
+        "reversible; review what it changes."
+    ),
+    "create_work_item": (
+        "Creates a task in this project — additive and reversible; review what it writes."
+    ),
+    "link_work_item": (
+        "Links an existing task to a document or conversation in this project — additive and "
+        "reversible; review what it changes."
+    ),
+    "promote_to_knowledge": (
+        "Promotes this run's synthesis into the project Knowledge Base — additive and "
+        "reversible; review what becomes curated knowledge."
+    ),
+    # Writes and execution inside the run's own sandbox.
+    "write_file": "Writes a file into this run's sandboxed workspace — review what it writes.",
+    "package_artifact": (
+        "Packages this run's workspace files as a downloadable artifact — review what it includes."
+    ),
+    "apply_patch_sandbox": (
+        "Applies the proposed patch inside this run's sandbox — review the change first."
+    ),
+    "run_check": (
+        "Runs one allowlisted check command inside this run's sandbox — review before it executes."
+    ),
+    # Read-only reads that reach outside the host.
+    "netops_collect": (
+        "Reads network telemetry from your devices (read-only, leaves this machine) — "
+        "a good place to review."
+    ),
+    "data_catalog": (
+        "Lists the allowed tables and columns of a connected data source (read-only, leaves this "
+        "machine) — a good place to review."
+    ),
+    "data_query": (
+        "Runs one read-only query against a connected data source (leaves this machine) — "
+        "a good place to review."
+    ),
+    # Device changes and beyond-contract code.
+    "netops_auto_apply": (
+        "Applies a bounded low-risk change to a network device, with automatic rollback if "
+        "validation fails — review before it runs."
+    ),
+    "netops_apply": ("Changes a network device — always requires approval, even in Auto-complete."),
+    "mcp_call": (
+        "Calls a connector tool that may write to an external system — always requires "
+        "approval, even in Auto-complete."
+    ),
+    "plugin_tool": (
+        "Runs admin-installed plugin code the platform cannot classify — always requires "
+        "approval, even in Auto-complete."
     ),
 }
 
