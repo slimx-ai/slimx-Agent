@@ -58,6 +58,7 @@ _now = time.monotonic
 # "failed" (after the terminal event is appended, before the final drain, so anything the
 # hook appends still reaches a live stream). Never called for pause/cancel: those are user
 # decisions the host must not auto-extend. Never called when a drive ends on an unknown outcome.
+# Never called again for a step failure an earlier drive already reported with ``agent.run.failed``.
 type RunEndHook[RunT] = Callable[[RunT, str], None]
 
 # What a drive yields: ``("event", payload)`` for each newly persisted durable event.
@@ -128,7 +129,14 @@ def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
             # otherwise reach dispatch with neither the permission nor the approval gate applied.
             raise UnknownStepStatus(step.id, step.status)
         if step.status == "failed":
-            store.set_run_status(run, "failed")
+            # The step was already failed when this pass read it: an earlier drive's failure on
+            # a run the host re-opened, or a failure the host wrote itself. The run fails either
+            # way; the terminal event and the hook fire only if that failure was never reported,
+            # so a re-drive neither duplicates them nor ends a run silently.
+            if _run_failure_reported(store, run.id, step.id):
+                store.set_run_status(run, "failed")
+            else:
+                _fail_run(store, run, step.id, on_run_end)
             yield from drain()
             return
         # Budget gate — before any work on the next step. Exhaustion is an honest PAUSE (event
@@ -204,10 +212,7 @@ def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
             # new action and applies normal manual/automatic policy, matching in-process parity.
             return
         if ran.status == "failed":
-            store.append_event(run.id, contracts.RUN_FAILED, step_id=ran.id, commit=False)
-            store.set_run_status(run, "failed")
-            if on_run_end is not None:
-                on_run_end(run, "failed")
+            _fail_run(store, run, ran.id, on_run_end)
             yield from drain()
             return
 
@@ -272,6 +277,33 @@ def run_step[RunT: RunView, StepT: StepView, ContextT, ProfileT](
         payload={"type": fresh_step.type, **(output_refs or {})},
     )
     return fresh_step
+
+
+def _fail_run[RunT: RunView, StepT: StepView](
+    store: RunStore[RunT, StepT, object],
+    run: RunT,
+    step_id: HostId,
+    on_run_end: RunEndHook[RunT] | None,
+) -> None:
+    """End the run as failed: the terminal event, the status, then the hook, as one unit."""
+    store.append_event(run.id, contracts.RUN_FAILED, step_id=step_id, commit=False)
+    store.set_run_status(run, "failed")
+    if on_run_end is not None:
+        on_run_end(run, "failed")
+
+
+def _run_failure_reported[RunT: RunView, StepT: StepView](
+    store: RunStore[RunT, StepT, object], run_id: HostId, step_id: HostId
+) -> bool:
+    """Whether the run's durable log already holds ``agent.run.failed`` for this step.
+
+    Step ids are compared as text: a host may hold a UUID while its wire payload carries a string.
+    """
+    wanted = str(step_id)
+    return any(
+        event.get("type") == contracts.RUN_FAILED and str(event.get("agent_step_id")) == wanted
+        for event in store.drained_events(run_id, 0)
+    )
 
 
 def _budget_exhausted_reason(
