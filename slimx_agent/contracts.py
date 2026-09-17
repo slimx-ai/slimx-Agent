@@ -1,13 +1,13 @@
 """SlimX-Agent contracts: the stable constants shared by every agent surface.
 
-The single source of truth for step types, run modes, approval policies, tool grants, and the
-durable event vocabulary. Historically these lived in ``app.models.agent_run`` and
-``app.services.agent.events``; those modules now re-export from here so every existing import
-path keeps working (Stage B of ``docs/slimx-agent-extraction-plan.md``).
+The single source of truth for step types, run modes, approval policies, tool grants, step
+statuses and the durable event vocabulary. Hosts import them from here. A host may keep thin
+re-export modules for its older import paths (ControlRoom does), but it owns no second copy of
+the vocabulary.
 
-**Dependency rule:** this module imports nothing beyond the standard library — no ORM, no
-FastAPI, no other ``app.*`` modules — so it can move verbatim into the standalone
-``slimx-agent`` package. A guard test enforces this.
+**Dependency rule:** this module imports nothing beyond the standard library — no ORM, no web
+framework, no host modules — so every surface, including a host's models and UI-facing code, can
+depend on it. A guard test enforces this.
 """
 
 from __future__ import annotations
