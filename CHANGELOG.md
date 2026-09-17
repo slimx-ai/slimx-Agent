@@ -43,6 +43,16 @@ exactly as 0.20.0.
   *Migration:* none. A host sees fewer budget pauses, and only on runs that had nothing left to
   execute.
 
+### Documentation and tests
+
+- **The handler-exception contract is written down and pinned.** The README now tabulates what
+  the engine does for `StepExecutionError`, `StepNotApplicable`, `StepActionPrepared`,
+  `StepOutcomeUnknown`, any other `Exception`, and a non-`Exception` `BaseException`. One
+  parametrized engine test proves each row on a store that accepts every write, so none of them
+  depends on a host store refusing. No behavior change. A host whose admission failures are
+  ordinary exceptions (ControlRoom's invocation-ledger conflicts are `RuntimeError`s) should
+  raise `StepOutcomeUnknown` where it means "unknown".
+
 ### Approval copy
 
 - **Approval reasons now describe the step they stop.** `policies.classify_step` used the model

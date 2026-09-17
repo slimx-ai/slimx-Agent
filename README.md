@@ -76,6 +76,22 @@ ceiling to match the other.
   `auto_complete`, and only from a real list; a junk stored value pre-approves nothing.
 - **Outcomes.**
   - `completed`, `skipped`, and `failed` are the only terminal step states the engine writes.
+  - What a handler raises decides which. This is the whole contract, and
+    `tests/test_engine.py` pins it on a store that accepts every write:
+
+    | A handler raises | The engine | Meaning |
+    | --- | --- | --- |
+    | `StepExecutionError` | writes `failed`, fails the run, calls the hook | a genuine failure |
+    | `StepNotApplicable` | writes `skipped`, continues | required inputs were absent |
+    | `StepActionPrepared` | re-reads the step, re-enters the gates | the host prepared a new action generation |
+    | `StepOutcomeUnknown` | writes no terminal state or event, ends the drive, re-raises | the outcome was not observed |
+    | any other `Exception` | rolls back, writes `failed`, fails the run | a bug in the handler |
+    | a `BaseException` that is not an `Exception` | writes nothing further, propagates | a host control signal |
+
+  - A host that means "I cannot tell whether this ran" (an admission ledger conflict, a lost
+    lease, an entry already in progress) must raise `StepOutcomeUnknown` or a subclass of it.
+    An ordinary exception is projected as a failure unless the host's store refuses the write,
+    and a guarantee that depends on the store refusing is not one the engine makes.
   - A prepared action generation re-enters the gates, and an earlier approval never carries
     over.
   - An unknown outcome (`StepOutcomeUnknown`) ends the drive with no terminal write and no
