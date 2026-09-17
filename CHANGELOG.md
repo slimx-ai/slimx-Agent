@@ -5,6 +5,13 @@ change is listed here with a migration note. The newest release heading must equ
 `slimx_agent.__version__` (`scripts/check_version.py` enforces it). A version is a source
 identity only until a tag or published artifact exists; see [`docs/release.md`](docs/release.md).
 
+## 0.21.0 — unreleased (not tagged or published)
+
+Opens the development line after 0.20.0. ControlRoom consumes 0.20.0 by exact source commit
+(`dc04d360`), so every later behavior change carries this new version instead of altering what
+0.20.0 names. Behavior changes are listed here as each one merges; until then 0.21.0 behaves
+exactly as 0.20.0.
+
 ## 0.20.0 — unreleased (not tagged or published)
 
 A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits

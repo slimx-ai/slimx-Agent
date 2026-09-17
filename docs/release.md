@@ -32,6 +32,8 @@ automated. Tagging and publishing always need explicit release authorization.
   `__version__`.
 - **0.20.0 is an unreleased source version.** It contains the 0.18.0/0.19.0 commits unchanged.
   Consumers identify it by exact commit until a tag exists.
+- **0.21.0 is the open development version.** ControlRoom consumes 0.20.0 by exact source
+  archive of `dc04d360`, so changes after that commit carry 0.21.0.
 
 ## Procedure
 
