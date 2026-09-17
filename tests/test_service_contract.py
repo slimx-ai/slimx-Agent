@@ -194,6 +194,35 @@ def test_lease_loss_at_the_tool_edge_stops_without_a_false_failed_step(monkeypat
     assert host.run_end_calls == []
 
 
+@pytest.mark.parametrize("path", ["/agent/runs/r1/execute", "/agent/runs/r1/execute/stream"])
+def test_an_unreported_failed_step_reaches_the_host_as_one_terminal_event_and_one_run_end(
+    monkeypatch, path
+):
+    """The completion invariant over the wire: a step the host already marked failed, with no
+    ``agent.run.failed`` in its log, ends the run with that event and one ``/run-end`` callback.
+    Once reported, a re-drive of the re-opened run repeats neither."""
+    host = FakeHost()
+    host.add_run("r1")
+    host.add_step("r1", "s1", "model_call", status="failed", error="resolved as failed")
+    host.add_step("r1", "s2", "model_call")
+    client = _service(host, monkeypatch)
+
+    assert client.post(path, json=execution_body(1)).status_code == 200
+
+    assert host.runs["r1"]["status"] == "failed"
+    assert host.event_types("r1") == [contracts.RUN_FAILED]
+    assert host.events["r1"][0]["agent_step_id"] == "s1"
+    assert host.run_end_calls == [("r1", "failed")]
+    assert host.invoked_profiles == []
+
+    host.runs["r1"]["status"] = "planned"
+    assert client.post(path, json=execution_body(2)).status_code == 200
+
+    assert host.runs["r1"]["status"] == "failed"
+    assert host.event_types("r1") == [contracts.RUN_FAILED]
+    assert host.run_end_calls == [("r1", "failed")]
+
+
 # --- invocation-outcome envelopes -------------------------------------------------------
 
 

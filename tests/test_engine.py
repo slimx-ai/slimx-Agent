@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -669,29 +670,256 @@ def test_an_unknown_outcome_ends_the_drive_without_terminal_writes_or_retry():
     assert ends == []
 
 
-def test_a_run_with_an_earlier_failed_step_is_marked_failed_on_the_next_drive():
-    """Recorded legacy behavior: no handler runs, no second RUN_FAILED event is appended, and
-    the epilogue does not fire again."""
+def test_a_reported_step_failure_is_not_reported_again_on_a_re_drive():
+    """A host re-opens a failed run without resetting the failed step. The next drive fails the
+    run again, but the failure was already reported: no handler runs, no second RUN_FAILED is
+    appended, and the epilogue does not fire again."""
+    calls: list[str] = []
+
+    def fail_second(ctx, run, step, profile):
+        calls.append(step.id)
+        if step.id == "s2":
+            raise StepExecutionError("model exploded")
+        return {}
+
+    store = MemoryStore(
+        FakeRun("r"),
+        [FakeStep("s1", "model_call"), FakeStep("s2", "model_call"), FakeStep("s3", "model_call")],
+    )
+    ends: list[str] = []
+
+    def drive():
+        engine.execute_run(
+            store,
+            _registry(fail_second),
+            store.run,
+            profile=object(),
+            on_run_end=lambda r, s: ends.append(s),
+        )
+
+    drive()
+    assert store.run.status == "failed" and ends == ["failed"] and calls == ["s1", "s2"]
+    first_drive = _types(store)
+    assert first_drive.count(contracts.RUN_FAILED) == 1
+
+    store.run.status = "planned"  # the host re-opens the run; s2 stays failed
+    drive()
+
+    assert store.run.status == "failed"
+    assert calls == ["s1", "s2"] and ends == ["failed"]
+    assert _types(store) == first_drive
+
+
+def test_a_step_failure_nobody_reported_ends_the_run_with_its_terminal_event_and_hook():
+    """BUG-03: a step the host itself marked failed, with no ``agent.run.failed`` in the log, used
+    to end the run silently. The run now gets exactly one terminal event and one hook call."""
     calls: list[str] = []
     store = MemoryStore(
         FakeRun("r"),
         [
             FakeStep("s1", "model_call", status="completed"),
-            FakeStep("s2", "model_call", status="failed"),
+            FakeStep("s2", "model_call", status="failed", error="host resolved it as failed"),
             FakeStep("s3", "model_call"),
         ],
     )
     ends: list[str] = []
+    streamed = [
+        payload["type"]
+        for _kind, payload in engine.execute_run_events(
+            store,
+            _registry(lambda c, r, s, p: calls.append(s.id) or {}),
+            store.run,
+            profile=object(),
+            on_run_end=lambda r, s: ends.append(s),
+        )
+    ]
+
+    assert store.run.status == "failed"
+    assert calls == [] and ends == ["failed"]
+    assert _types(store) == [contracts.RUN_FAILED] == streamed
+    assert store.events[0]["agent_step_id"] == "s2"
+    assert [s.status for s in store.steps] == ["completed", "failed", "pending"]
+    assert store.steps[1].error == "host resolved it as failed"
+
+    store.run.status = "planned"  # re-opened again: that failure is now reported
+    engine.execute_run(
+        store, _registry(), store.run, profile=object(), on_run_end=lambda r, s: ends.append(s)
+    )
+    assert _types(store) == [contracts.RUN_FAILED] and ends == ["failed"]
+
+
+def test_a_step_the_host_fails_mid_drive_ends_the_run_with_its_terminal_event_and_hook():
+    store = MemoryStore(FakeRun("r"), [FakeStep("s1", "model_call"), FakeStep("s2", "model_call")])
+
+    def fails_the_next_step(ctx, run, step, profile):
+        store.steps[1].status = "failed"  # an out-of-band host write, not an engine outcome
+        return {}
+
+    ends: list[str] = []
     engine.execute_run(
         store,
-        _registry(lambda c, r, s, p: calls.append(s.id) or {}),
+        _registry(fails_the_next_step),
         store.run,
         profile=object(),
         on_run_end=lambda r, s: ends.append(s),
     )
-    assert store.run.status == "failed"
-    assert calls == [] and ends == []
-    assert _types(store) == []
+
+    assert store.run.status == "failed" and ends == ["failed"]
+    assert _types(store) == [contracts.STEP_STARTED, contracts.STEP_COMPLETED, contracts.RUN_FAILED]
+    assert store.events[-1]["agent_step_id"] == "s2"
+
+
+def test_a_reported_failure_is_matched_by_step_id_text_not_object_identity():
+    """ControlRoom holds UUID step ids while its wire payload carries their string form."""
+    step_id = uuid.UUID("00000000-0000-0000-0000-0000000000a2")
+    store = MemoryStore(FakeRun("r"), [FakeStep(step_id, "model_call", status="failed")])  # type: ignore[arg-type]
+    store.append_event("r", contracts.RUN_FAILED, step_id=str(step_id))
+    ends: list[str] = []
+
+    engine.execute_run(
+        store, _registry(), store.run, profile=object(), on_run_end=lambda r, s: ends.append(s)
+    )
+
+    assert store.run.status == "failed" and ends == []
+    assert _types(store) == [contracts.RUN_FAILED]
+
+
+def test_a_failure_reported_for_another_step_does_not_silence_this_one():
+    store = MemoryStore(
+        FakeRun("r"),
+        [
+            FakeStep("s1", "model_call", status="skipped"),
+            FakeStep("s2", "model_call", status="failed"),
+        ],
+    )
+    store.append_event("r", contracts.RUN_FAILED, step_id="s1")
+    ends: list[str] = []
+
+    engine.execute_run(
+        store, _registry(), store.run, profile=object(), on_run_end=lambda r, s: ends.append(s)
+    )
+
+    assert ends == ["failed"]
+    assert [e["agent_step_id"] for e in store.events] == ["s1", "s2"]
+
+
+@dataclass
+class TerminalWriteCountingStore(MemoryStore):
+    """Counts the run-status writes that end a run, so every exit can be checked for pairing."""
+
+    terminal_writes: list[str] = field(default_factory=list)
+
+    def set_run_status(self, run, status):
+        if status in ("completed", "failed"):
+            self.terminal_writes.append(status)
+        return super().set_run_status(run, status)
+
+
+def _raise(exc: BaseException):
+    def handler(ctx, run, step, profile):
+        raise exc
+
+    return handler
+
+
+def _pause(ctx, run, step, profile):
+    run.status = "paused"
+    return {}
+
+
+def _cancel(ctx, run, step, profile):
+    run.status = "cancelled"
+    return {}
+
+
+@pytest.mark.parametrize(
+    ("name", "run", "steps", "handler", "terminal"),
+    [
+        ("completes", {}, [FakeStep("a", "model_call")], None, "completed"),
+        ("all skipped", {}, [FakeStep("a", "web_search")], None, "completed"),
+        ("no steps", {}, [], None, "completed"),
+        (
+            "fails in the drive",
+            {},
+            [FakeStep("a", "model_call")],
+            _raise(StepExecutionError("boom")),
+            "failed",
+        ),
+        (
+            "crashes in the drive",
+            {},
+            [FakeStep("a", "model_call")],
+            _raise(ValueError("x")),
+            "failed",
+        ),
+        ("unsupported type", {}, [FakeStep("a", "never_registered")], None, "failed"),
+        (
+            "already failed, unreported",
+            {},
+            [FakeStep("a", "model_call", status="failed")],
+            None,
+            "failed",
+        ),
+        ("paused by the last step", {}, [FakeStep("a", "model_call")], _pause, None),
+        ("cancelled by the last step", {}, [FakeStep("a", "model_call")], _cancel, None),
+        (
+            "unknown outcome",
+            {},
+            [FakeStep("a", "model_call")],
+            _raise(StepOutcomeUnknown("lost")),
+            None,
+        ),
+        (
+            "stops at the approval gate",
+            {"approval_policy": "manual"},
+            [FakeStep("a", "model_call", requires_approval=True)],
+            None,
+            None,
+        ),
+        (
+            "step budget exhausted",
+            {"budget_max_steps": 1},
+            [FakeStep("a", "model_call", status="completed"), FakeStep("b", "model_call")],
+            None,
+            None,
+        ),
+        ("already terminal", {"status": "cancelled"}, [FakeStep("a", "model_call")], None, None),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_every_engine_exit_pairs_a_terminal_status_with_one_event_and_one_hook_call(
+    name, run, steps, handler, terminal
+):
+    """The completion invariant: a drive writes a terminal run status exactly when it appends
+    that status's terminal event and calls ``on_run_end`` once. Pause, cancel, an approval stop,
+    a budget pause and an unknown outcome write none of the three."""
+    budget = {k: run.pop(k) for k in list(run) if k.startswith("budget_")}
+    fake_run = FakeRun("r", **run)
+    for key, value in budget.items():
+        setattr(fake_run, key, value)
+    store = TerminalWriteCountingStore(fake_run, steps)
+    ends: list[str] = []
+
+    try:
+        engine.execute_run(
+            store,
+            _registry(handler),
+            store.run,
+            profile=object(),
+            on_run_end=lambda r, s: ends.append(s),
+        )
+    except StepOutcomeUnknown:
+        pass
+
+    terminal_events = [
+        {contracts.RUN_COMPLETED: "completed", contracts.RUN_FAILED: "failed"}[t]
+        for t in _types(store)
+        if t in (contracts.RUN_COMPLETED, contracts.RUN_FAILED)
+    ]
+    expected = [terminal] if terminal else []
+    assert store.terminal_writes == expected, name
+    assert terminal_events == expected, name
+    assert ends == expected, name
 
 
 def test_an_awaiting_step_is_auto_approved_after_a_mid_run_policy_change():

@@ -12,6 +12,20 @@ Opens the development line after 0.20.0. ControlRoom consumes 0.20.0 by exact so
 0.20.0 names. Behavior changes are listed here as each one merges; until then 0.21.0 behaves
 exactly as 0.20.0.
 
+### Behavior changes
+
+- **A step failure nobody reported no longer ends a run silently.** When a drive finds its first
+  unfinished step already `failed`, the engine still fails the run without dispatching anything.
+  It now also appends `agent.run.failed` for that step and calls `on_run_end(run, "failed")`,
+  unless the run's log already holds `agent.run.failed` for the same step. Previously this path
+  wrote only the `failed` run status, so a step the host had failed itself ended the run with no
+  terminal event, no hook and, over the standalone service, no `/run-end` callback. A re-drive
+  of a run whose failure an earlier drive reported is unchanged: no second event, no second
+  hook. The check reads the run's events once, from sequence 0, on this path only.
+  *Migration:* a host that writes a `failed` step itself, leaves the run non-terminal and then
+  drives it now receives the terminal event and the hook once. A host that already appends its
+  own `agent.run.failed` for that step sees no change.
+
 ## 0.20.0 — unreleased (not tagged or published)
 
 A hardening release built on the 0.18.0/0.19.0 standalone-fencing commits

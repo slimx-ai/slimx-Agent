@@ -72,6 +72,16 @@ ceiling to match the other.
     over.
   - An unknown outcome (`StepOutcomeUnknown`) ends the drive with no terminal write and no
     retry; the host's durable invocation record decides what happened.
+- **Run completion.** A drive writes a terminal run status exactly when it appends that
+  status's terminal event (`agent.run.completed` or `agent.run.failed`) and calls `on_run_end`
+  once. Pause, cancel, an approval stop, a budget pause and an unknown outcome write none of the
+  three.
+  - A step failure is reported once per run, across drives. When a drive finds its first
+    unfinished step already `failed`, it fails the run and reports the failure only if the log
+    holds no `agent.run.failed` for that step; a host that re-opens a failed run gets no second
+    event and no second hook call.
+  - The match is by step id. A host that resets a failed step for retry and later fails it again
+    outside the engine must append its own terminal event.
 - **"Completed" means the loop finished.** A `completed` run status means every step reached
   `completed` or `skipped` without a stop. It is not a verified deliverable. Criterion-level
   acceptance, checked artifacts, and exact-snapshot executable checks are host
