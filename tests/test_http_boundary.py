@@ -71,6 +71,27 @@ def test_permission_gate_skips_ungranted_external_tool():
     assert host.steps["s2"]["status"] == "completed"
 
 
+def test_a_running_step_whose_grant_is_gone_is_not_re_entered_over_the_wire():
+    """The same refusal through ``HttpRunStore``: no invoke, no state write, no event."""
+    host = FakeHost()
+    host.add_run("r1", allowed_tools_json=[])
+    host.add_step("r1", "s1", "web_search", status="running")
+    host.add_step("r1", "s2", "model_call")
+
+    try:
+        _drive(host, "r1")
+    except engine.RunningStepNotPermitted as refused:
+        assert refused.step_id == "s1"
+    else:  # pragma: no cover - would only run on a regression
+        raise AssertionError("an ungranted running step was driven")
+
+    assert host.invoked_profiles == []
+    assert host.state_bodies == []
+    assert host.events["r1"] == []
+    assert host.steps["s1"]["status"] == "running" and host.steps["s2"]["status"] == "pending"
+    assert host.run_end_calls == []
+
+
 def test_hard_gate_stops_even_in_auto_complete():
     host = FakeHost()
     host.add_run("r1", allowed_tools_json=["mcp_tools"])

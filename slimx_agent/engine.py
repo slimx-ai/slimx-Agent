@@ -8,8 +8,9 @@ event vocabulary from :mod:`slimx_agent.contracts`. Invariants hosts rely on: ga
 (permission BEFORE approval), fresh run re-reads so mid-run pause/cancel/policy changes are
 honored (including during the LAST step), legacy ``approval_policy IS NULL`` behavior, event
 payload shapes, and no terminal step state without an authoritative outcome — a prepared
-action generation re-enters the gates, an unknown outcome ends the drive untouched, and a step
-in an unrecognized status is refused rather than dispatched ungated.
+action generation re-enters the gates, an unknown outcome ends the drive untouched, a step in
+an unrecognized status is refused rather than dispatched ungated, and a step left ``running``
+whose grant is gone is refused rather than re-entered or skipped.
 
 The engine holds no model transport, no persistence, and no host capabilities — hosts
 provide those via the registry's handlers (which receive ``store.handler_context``), and may
@@ -49,6 +50,24 @@ class UnknownStepStatus(RuntimeError):
         )
         self.step_id = step_id
         self.status = status
+
+
+class RunningStepNotPermitted(RuntimeError):
+    """A step an interrupted drive left ``running`` no longer holds its tool grant.
+
+    The engine cannot skip it: the earlier attempt may already have entered the host, and a
+    terminal ``skipped`` would claim an outcome nobody observed. It cannot dispatch it either:
+    approval never bypasses a missing grant. So it ends the drive with nothing written for the
+    step, and the host's durable records decide what happened.
+    """
+
+    def __init__(self, step_id: HostId, reason: str) -> None:
+        super().__init__(
+            f"step {step_id!r} was left running and is no longer permitted; it was not "
+            f"re-entered: {reason}"
+        )
+        self.step_id = step_id
+        self.reason = reason
 
 
 # Monotonic clock for the wall budget, as a module alias so tests can stub it.
@@ -161,6 +180,14 @@ def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
                 _skip_step(store, run, step.id, step.type, permit_reason)
                 yield from drain()
                 continue
+        elif step.status == "running":
+            # An interrupted drive left this step running. Whether it may be re-entered at most
+            # once is the store's decision (the ``running`` transition); whether it is still
+            # PERMITTED is this gate's. A missing grant refuses the re-entry without a skip,
+            # because the earlier attempt may already have run.
+            permit_reason = policies.permission_block_reason(step, current or run)
+            if permit_reason is not None:
+                raise RunningStepNotPermitted(step.id, permit_reason)
         # Approval gate — deterministic, host-enforced policy. Read the run fresh so a
         # mid-run policy/auto_approve toggle is honored. ``approval_policy is None`` keeps
         # the exact legacy behavior (gate only planner-flagged steps; ``auto_approve``

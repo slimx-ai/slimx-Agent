@@ -28,7 +28,7 @@ from slimx_agent.contracts import (
     GRANTABLE_TOOLS,
     STEP_STATUSES,
 )
-from slimx_agent.engine import UnknownStepStatus
+from slimx_agent.engine import RunningStepNotPermitted, UnknownStepStatus
 from slimx_agent.runtime import AgentRunConflict, AgentRuntime, ProfileView, RunProfile
 from slimx_agent.store import UNSET, RunStore, RunView, StepView
 from slimx_agent.tools import (
@@ -56,6 +56,7 @@ __all__ = [
     "RunProfile",
     "RunStore",
     "RunView",
+    "RunningStepNotPermitted",
     "StepActionPrepared",
     "StepExecutionError",
     "StepNotApplicable",

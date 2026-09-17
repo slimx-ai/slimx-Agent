@@ -884,6 +884,13 @@ def _cancel(ctx, run, step, profile):
             None,
         ),
         ("already terminal", {"status": "cancelled"}, [FakeStep("a", "model_call")], None, None),
+        (
+            "running step lost its grant",
+            {"allowed_tools_json": []},
+            [FakeStep("a", "web_search", status="running")],
+            None,
+            None,
+        ),
     ],
     ids=lambda value: value if isinstance(value, str) else None,
 )
@@ -892,7 +899,7 @@ def test_every_engine_exit_pairs_a_terminal_status_with_one_event_and_one_hook_c
 ):
     """The completion invariant: a drive writes a terminal run status exactly when it appends
     that status's terminal event and calls ``on_run_end`` once. Pause, cancel, an approval stop,
-    a budget pause and an unknown outcome write none of the three."""
+    a budget pause, an unknown outcome and a refused re-entry write none of the three."""
     budget = {k: run.pop(k) for k in list(run) if k.startswith("budget_")}
     fake_run = FakeRun("r", **run)
     for key, value in budget.items():
@@ -908,7 +915,7 @@ def test_every_engine_exit_pairs_a_terminal_status_with_one_event_and_one_hook_c
             profile=object(),
             on_run_end=lambda r, s: ends.append(s),
         )
-    except StepOutcomeUnknown:
+    except (StepOutcomeUnknown, engine.RunningStepNotPermitted):
         pass
 
     terminal_events = [
@@ -978,6 +985,63 @@ def test_an_interrupted_running_step_is_re_entered_only_through_the_running_tran
     )
     assert calls == ["s1"]
     assert permissive.steps[0].status == "completed"
+
+
+@pytest.mark.parametrize("grants", [None, [], ["code_read"]], ids=["legacy", "empty", "other"])
+def test_a_running_step_whose_grant_is_gone_is_neither_re_entered_nor_skipped(grants):
+    """RISK-02: an interrupted drive left a granted step ``running`` and the grant is now absent.
+    Approval never bypasses a missing grant, so the handler is not re-entered. The earlier attempt
+    may already have run, so no terminal ``skipped`` is written either: the drive ends with
+    nothing written for the step, even on a store that would accept every write."""
+    calls: list[str] = []
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=grants),
+        [FakeStep("s1", "web_search", status="running"), FakeStep("s2", "model_call")],
+    )
+    ends: list[str] = []
+    with pytest.raises(engine.RunningStepNotPermitted) as refused:
+        engine.execute_run(
+            store,
+            _counting_registry("web_search", lambda c, r, s, p: calls.append(s.id) or {}),
+            store.run,
+            profile=object(),
+            on_run_end=lambda r, s: ends.append(s),
+        )
+
+    assert refused.value.step_id == "s1"
+    assert "not enabled for this run" in refused.value.reason
+    assert calls == [] and ends == []
+    assert store.events == []
+    assert [s.status for s in store.steps] == ["running", "pending"]
+    assert store.steps[0].error is None
+    assert store.run.status == "running"
+
+
+def test_a_running_step_that_keeps_its_grant_is_still_re_entered_through_the_store():
+    calls: list[str] = []
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=["web_search"]),
+        [FakeStep("s1", "web_search", status="running")],
+    )
+    engine.execute_run(
+        store,
+        _counting_registry("web_search", lambda c, r, s, p: calls.append(s.id) or {}),
+        store.run,
+        profile=object(),
+    )
+    assert calls == ["s1"]
+    assert store.steps[0].status == "completed" and store.run.status == "completed"
+
+
+def test_a_running_step_that_needs_no_grant_is_unaffected_by_the_run_grants():
+    calls: list[str] = []
+    store = MemoryStore(
+        FakeRun("r", allowed_tools_json=[]), [FakeStep("s1", "model_call", status="running")]
+    )
+    engine.execute_run(
+        store, _registry(lambda c, r, s, p: calls.append(s.id) or {}), store.run, profile=object()
+    )
+    assert calls == ["s1"] and store.run.status == "completed"
 
 
 @pytest.mark.parametrize(
