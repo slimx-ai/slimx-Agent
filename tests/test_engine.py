@@ -366,6 +366,72 @@ def test_step_budget_pauses_the_run_honestly():
     assert "step budget" in exhausted["payload_json"]["reason"]
 
 
+def test_an_exhausted_step_budget_does_not_pause_a_run_that_only_has_skips_left():
+    """BUG-04: honest skips are free. With the budget spent and only ungranted steps left, the
+    run skips them and completes; the user is not asked to raise a budget for steps that do no
+    work."""
+    run = FakeRun("r", allowed_tools_json=None)
+    run.budget_max_steps = 1
+    store = MemoryStore(
+        run,
+        [
+            FakeStep("s1", "model_call", status="completed"),
+            FakeStep("s2", "web_search"),
+            FakeStep("s3", "web_search"),
+        ],
+    )
+    ends: list[str] = []
+    engine.execute_run(
+        store, _registry(), store.run, profile=object(), on_run_end=lambda r, s: ends.append(s)
+    )
+    assert store.run.status == "completed" and ends == ["completed"]
+    assert [s.status for s in store.steps] == ["completed", "skipped", "skipped"]
+    assert _types(store) == [
+        contracts.STEP_SKIPPED,
+        contracts.STEP_SKIPPED,
+        contracts.RUN_COMPLETED,
+    ]
+
+
+def test_an_exhausted_step_budget_still_pauses_before_the_next_step_that_would_work():
+    """The skip is free; the granted step after it is not."""
+    run = FakeRun("r", allowed_tools_json=None)
+    run.budget_max_steps = 1
+    calls: list[str] = []
+    store = MemoryStore(
+        run,
+        [
+            FakeStep("s1", "model_call", status="completed"),
+            FakeStep("s2", "web_search"),
+            FakeStep("s3", "model_call"),
+        ],
+    )
+    engine.execute_run(
+        store, _registry(lambda c, r, s, p: calls.append(s.id) or {}), store.run, profile=object()
+    )
+    assert calls == []
+    assert store.run.status == "paused"
+    assert [s.status for s in store.steps] == ["completed", "skipped", "pending"]
+    assert _types(store) == [
+        contracts.STEP_SKIPPED,
+        contracts.BUDGET_EXHAUSTED,
+        contracts.RUN_PAUSED,
+    ]
+
+
+def test_an_exhausted_wall_budget_does_not_pause_a_run_that_only_has_skips_left(monkeypatch):
+    run = FakeRun("r", allowed_tools_json=None)
+    run.budget_max_wall_seconds = 10
+    store = MemoryStore(run, [FakeStep("s1", "model_call"), FakeStep("s2", "web_search")])
+    # anchor(0) -> s1's check within budget(1) -> s1 runs -> s2 is skipped before any clock read
+    clock = iter([0.0, 1.0])
+    monkeypatch.setattr(engine, "_now", lambda: next(clock))
+    engine.execute_run(store, _registry(), store.run, profile=object())
+    assert store.run.status == "completed"
+    assert [s.status for s in store.steps] == ["completed", "skipped"]
+    assert contracts.BUDGET_EXHAUSTED not in _types(store)
+
+
 def test_wall_budget_pauses_between_steps(monkeypatch):
     run = FakeRun("r")
     run.budget_max_wall_seconds = 10

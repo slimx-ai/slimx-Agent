@@ -35,6 +35,13 @@ exactly as 0.20.0.
   *Migration:* a host that can revoke grants mid-run should treat this refusal as "resolve the
   step from your own records", the same as an unknown outcome. ControlRoom does not revoke
   grants after launch and resets `running` steps on resume, so it does not reach this path.
+- **The permission gate now runs before the budget gate.** With `budget_max_steps` or
+  `budget_max_wall_seconds` spent and only ungranted steps left, the engine used to append
+  `agent.run.budget_exhausted` and pause, so a user had to raise a budget for steps that would
+  only be skipped. Those steps are now skipped and the run completes. A run still pauses before
+  the next step that would do work.
+  *Migration:* none. A host sees fewer budget pauses, and only on runs that had nothing left to
+  execute.
 
 ## 0.20.0 — unreleased (not tagged or published)
 

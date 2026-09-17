@@ -5,7 +5,7 @@ the deterministic approval gate (hard gates stop even in Auto-complete), dispatc
 the :class:`~slimx_agent.tools.ToolRegistry` (the ONLY path to a tool implementation),
 persists transitions through a :class:`~slimx_agent.store.RunStore`, and emits the durable
 event vocabulary from :mod:`slimx_agent.contracts`. Invariants hosts rely on: gate ordering
-(permission BEFORE approval), fresh run re-reads so mid-run pause/cancel/policy changes are
+(permission, then budget, then approval), fresh run re-reads so mid-run pause/cancel/policy changes are
 honored (including during the LAST step), legacy ``approval_policy IS NULL`` behavior, event
 payload shapes, and no terminal step state without an authoritative outcome — a prepared
 action generation re-enters the gates, an unknown outcome ends the drive untouched, a step in
@@ -158,22 +158,12 @@ def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
                 _fail_run(store, run, step.id, on_run_end)
             yield from drain()
             return
-        # Budget gate — before any work on the next step. Exhaustion is an honest PAUSE (event
-        # with the reason, then the paused status), never a silent truncation: the user raises
-        # the budget and re-executes, or accepts the partial result.
-        budget_reason = _budget_exhausted_reason(current or run, steps, drive_started)
-        if budget_reason is not None:
-            store.append_event(
-                run.id, contracts.BUDGET_EXHAUSTED, payload={"reason": budget_reason}
-            )
-            store.set_run_status(run, "paused")
-            store.append_event(run.id, contracts.RUN_PAUSED, payload={"reason": budget_reason})
-            yield from drain()
-            return
-        # Tool-permission gate — runs BEFORE the approval gate so an ungranted external tool
-        # is skipped honestly rather than stopping the run for an approval it could never
-        # satisfy. The fresh run's grants are authoritative, and an already-approved step is
-        # re-checked too: approval never bypasses a grant that is missing or was revoked.
+        # Tool-permission gate — runs FIRST. Before the budget gate, because an honest skip does
+        # no work and is free: an exhausted budget must not pause a run whose remaining steps
+        # would only be skipped. Before the approval gate, so an ungranted external tool is
+        # skipped rather than stopping the run for an approval it could never satisfy. The fresh
+        # run's grants are authoritative, and an already-approved step is re-checked too:
+        # approval never bypasses a grant that is missing or was revoked.
         if step.status in ("pending", "awaiting_approval", "approved"):
             permit_reason = policies.permission_block_reason(step, current or run)
             if permit_reason is not None:
@@ -188,6 +178,19 @@ def execute_run_events[RunT: RunView, StepT: StepView, ContextT, ProfileT](
             permit_reason = policies.permission_block_reason(step, current or run)
             if permit_reason is not None:
                 raise RunningStepNotPermitted(step.id, permit_reason)
+        # Budget gate — before any WORK on the next step, so after the permission gate has
+        # skipped whatever would do none. Exhaustion is an honest PAUSE (event with the reason,
+        # then the paused status), never a silent truncation: the user raises the budget and
+        # re-executes, or accepts the partial result.
+        budget_reason = _budget_exhausted_reason(current or run, steps, drive_started)
+        if budget_reason is not None:
+            store.append_event(
+                run.id, contracts.BUDGET_EXHAUSTED, payload={"reason": budget_reason}
+            )
+            store.set_run_status(run, "paused")
+            store.append_event(run.id, contracts.RUN_PAUSED, payload={"reason": budget_reason})
+            yield from drain()
+            return
         # Approval gate — deterministic, host-enforced policy. Read the run fresh so a
         # mid-run policy/auto_approve toggle is honored. ``approval_policy is None`` keeps
         # the exact legacy behavior (gate only planner-flagged steps; ``auto_approve``

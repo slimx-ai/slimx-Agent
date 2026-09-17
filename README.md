@@ -55,9 +55,12 @@ ceiling to match the other.
 
 ## Guarantees and their limits
 
-- **Gate order.** The permission gate runs before the approval gate. Grants never imply
-  approval, and approval never bypasses a missing grant: an already-approved step is
-  re-checked against the run's current grants.
+- **Gate order.** Permission, then budget, then approval. Grants never imply approval, and
+  approval never bypasses a missing grant: an already-approved step is re-checked against the
+  run's current grants.
+  - The permission gate precedes the budget gate because an honest skip does no work. An
+    exhausted budget pauses the run before the next step that would work, never before one that
+    would only be skipped.
   - A step that an interrupted drive left `running` is re-checked too. If its grant is gone, the
     engine raises `RunningStepNotPermitted` and writes nothing for the step. It does not skip it,
     because the earlier attempt may already have run. The standalone service answers 409.
