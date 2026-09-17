@@ -869,6 +869,112 @@ def test_a_failure_reported_for_another_step_does_not_silence_this_one():
     assert [e["agent_step_id"] for e in store.events] == ["s1", "s2"]
 
 
+class HostControlSignal(BaseException):
+    """What a host raises to stop a drive without the engine interpreting it (ControlRoom's
+    approval-receipt and execution-snapshot signals are ``BaseException`` for this reason)."""
+
+
+class HostAdmissionRefused(RuntimeError):
+    """A host-side refusal that is NOT declared to the engine: an ordinary exception."""
+
+
+@pytest.mark.parametrize(
+    ("raised", "step_status", "run_status", "event_types", "hook", "rollbacks", "propagates"),
+    [
+        # Failures and skips: the engine writes the terminal state it was told about.
+        (
+            StepExecutionError("model exploded"),
+            "failed",
+            "failed",
+            [contracts.STEP_STARTED, contracts.STEP_FAILED, contracts.RUN_FAILED],
+            ["failed"],
+            0,
+            None,
+        ),
+        (
+            StepNotApplicable("nothing to anchor"),
+            "skipped",
+            "completed",
+            [  # both steps skip, and the run still completes
+                contracts.STEP_STARTED,
+                contracts.STEP_SKIPPED,
+                contracts.STEP_STARTED,
+                contracts.STEP_SKIPPED,
+                contracts.RUN_COMPLETED,
+            ],
+            ["completed"],
+            0,
+            None,
+        ),
+        # Control flow: no terminal step state, no terminal event, no hook, nothing rolled back.
+        (
+            StepOutcomeUnknown("the outcome was not observed"),
+            "running",
+            "running",
+            [contracts.STEP_STARTED],
+            [],
+            0,
+            StepOutcomeUnknown,
+        ),
+        (
+            HostControlSignal("stop"),
+            "running",
+            "running",
+            [contracts.STEP_STARTED],
+            [],
+            0,
+            HostControlSignal,
+        ),
+        # Anything else is a bug in the handler: rolled back and projected as a failure. A host
+        # that means "unknown" must therefore raise StepOutcomeUnknown, not an ordinary exception.
+        (
+            HostAdmissionRefused("the ledger refused this entry"),
+            "failed",
+            "failed",
+            [contracts.STEP_STARTED, contracts.STEP_FAILED, contracts.RUN_FAILED],
+            ["failed"],
+            1,
+            None,
+        ),
+    ],
+    ids=["execution-error", "not-applicable", "outcome-unknown", "base-exception", "ordinary"],
+)
+def test_the_handler_exception_contract_on_a_store_that_accepts_every_write(
+    raised, step_status, run_status, event_types, hook, rollbacks, propagates
+):
+    """RISK-01: which handler exceptions are control flow and which are failures, proven on a
+    store that refuses nothing, so the result is the engine's own and not a host's safety net."""
+
+    def handler(ctx, run, step, profile):
+        raise raised
+
+    store = MemoryStore(FakeRun("r"), [FakeStep("s1", "model_call"), FakeStep("s2", "model_call")])
+    ends: list[str] = []
+
+    def drive():
+        engine.execute_run(
+            store,
+            _registry(handler),
+            store.run,
+            profile=object(),
+            on_run_end=lambda r, s: ends.append(s),
+        )
+
+    if propagates is None:
+        drive()
+    else:
+        with pytest.raises(propagates):
+            drive()
+
+    assert store.steps[0].status == step_status
+    assert store.run.status == run_status
+    assert _types(store)[: len(event_types)] == event_types
+    if propagates is not None:
+        assert _types(store) == event_types and store.steps[1].status == "pending"
+    assert ends == hook
+    assert store.rollbacks == rollbacks
+
+
 @dataclass
 class TerminalWriteCountingStore(MemoryStore):
     """Counts the run-status writes that end a run, so every exit can be checked for pairing."""
