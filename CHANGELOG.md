@@ -25,6 +25,16 @@ exactly as 0.20.0.
   *Migration:* a host that writes a `failed` step itself, leaves the run non-terminal and then
   drives it now receives the terminal event and the hook once. A host that already appends its
   own `agent.run.failed` for that step sees no change.
+- **A step left `running` is no longer re-entered once its grant is gone.** The permission gate
+  covered `pending`, `awaiting_approval` and `approved` steps only, so a step an interrupted
+  drive left `running` was dispatched again without a grant check. The engine now raises the new
+  `RunningStepNotPermitted` (exported from `slimx_agent`) before the `running` transition and
+  writes nothing for the step: no skip, no event, no hook. The standalone service maps it to
+  409 on `/execute` and ends `/execute/stream` cleanly. A `running` step that keeps its grant,
+  or needs none, is re-entered through the store exactly as before.
+  *Migration:* a host that can revoke grants mid-run should treat this refusal as "resolve the
+  step from your own records", the same as an unknown outcome. ControlRoom does not revoke
+  grants after launch and resets `running` steps on resume, so it does not reach this path.
 
 ## 0.20.0 — unreleased (not tagged or published)
 

@@ -404,6 +404,32 @@ def test_a_step_in_an_unrecognized_status_is_refused_and_never_invoked(monkeypat
     assert host.steps["s1"]["status"] == "queued"
 
 
+def test_a_running_step_whose_grant_is_gone_is_a_409_and_never_invoked(monkeypatch):
+    host = FakeHost()
+    host.add_run("r1", allowed_tools_json=[])
+    host.add_step("r1", "s1", "web_search", status="running")
+    response = _service(host, monkeypatch).post("/agent/runs/r1/execute", json=execution_body())
+    assert response.status_code == 409
+    assert "no longer permitted" in response.json()["detail"]
+    assert host.invoked_profiles == [] and host.state_bodies == []
+    assert host.steps["s1"]["status"] == "running"
+    assert not TERMINAL & set(host.event_types("r1"))
+    assert host.run_end_calls == []
+
+
+def test_the_stream_ends_cleanly_when_a_running_step_lost_its_grant(monkeypatch, caplog):
+    host = FakeHost()
+    host.add_run("r1", allowed_tools_json=[])
+    host.add_step("r1", "s1", "web_search", status="running")
+    with caplog.at_level(logging.WARNING, logger="slimx_agent.service"):
+        lines = _sse_lines(
+            _service(host, monkeypatch), "/agent/runs/r1/execute/stream", execution_body()
+        )
+    assert [line for line in lines if line.startswith("data: ")] == []
+    assert "drive ended early" in caplog.text
+    assert host.invoked_profiles == [] and host.steps["s1"]["status"] == "running"
+
+
 def test_host_error_details_are_bounded_at_the_service_edge(monkeypatch):
     host = _one_step_host()
     host.behaviors["model_call"] = _raising(HTTPException(409, detail="x" * 20_000))

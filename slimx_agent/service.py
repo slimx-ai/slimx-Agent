@@ -189,6 +189,11 @@ def _outcome_unknown_http_error(exc: StepOutcomeUnknown) -> HTTPException:
     return HTTPException(status_code=502, detail=bounded_detail(str(exc)))
 
 
+def _not_permitted_http_error(exc: engine.RunningStepNotPermitted) -> HTTPException:
+    """A step left running lost its grant: the run's state needs the host, so 409, not a fault."""
+    return HTTPException(status_code=409, detail=bounded_detail(str(exc)))
+
+
 def _sanitized_validation_errors(errors: Sequence[Any]) -> list[dict[str, object]]:
     """Validation errors without the offending input or context: never echo request material
     (which could carry a credential), and never fail to render a non-finite number."""
@@ -344,6 +349,8 @@ def create_app(host_client: HostClient | None = None) -> FastAPI:
             raise _host_http_error(exc) from exc
         except StepOutcomeUnknown as exc:
             raise _outcome_unknown_http_error(exc) from exc
+        except engine.RunningStepNotPermitted as exc:
+            raise _not_permitted_http_error(exc) from exc
         return {"run_id": str(final.id), "status": final.status}
 
     @app.post("/agent/runs/{run_id}/execute/stream")
@@ -367,10 +374,11 @@ def create_app(host_client: HostClient | None = None) -> FastAPI:
                     profile=profile,
                     on_run_end=on_run_end(profile, callback_client),
                 )
-            except (HostError, StepOutcomeUnknown) as exc:
+            except (HostError, StepOutcomeUnknown, engine.RunningStepNotPermitted) as exc:
                 # The drive ended without an authoritative stop (the host became unreachable,
-                # refused a callback, or a step outcome was not observed). The durable rows hold
-                # the truth; the stream just ends and the host reconciles from its records.
+                # refused a callback, a step outcome was not observed, or a step left running
+                # lost its grant). The durable rows hold the truth; the stream just ends and the
+                # host reconciles from its records.
                 logger.warning("run %s drive ended early: %s", run_id, bounded_detail(str(exc)))
 
         async def sse() -> AsyncIterator[str]:

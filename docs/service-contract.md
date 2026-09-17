@@ -58,6 +58,7 @@ with its own authoritative routing and re-resolves everything else from its reco
 | 401 | Missing or invalid bearer token |
 | 404 | The host has no such run |
 | 409, other 4xx | The host refused a callback (for example a stale execution lease); its status and bounded detail are relayed |
+| 409 | From 0.21.0, also: a step an interrupted drive left `running` no longer holds its tool grant. The step is neither re-entered nor skipped, and no callback writes anything for it |
 | 422 | Invalid body or run id, or missing/incomplete execution lease; no callback was made |
 | 502 | The host returned 5xx, a transport failure left no observed response, the host answered outside the wire shape, or a step outcome was not observed |
 | 503 | `SLIMX_AGENT_HOST_URL` is not configured |

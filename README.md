@@ -58,6 +58,11 @@ ceiling to match the other.
 - **Gate order.** The permission gate runs before the approval gate. Grants never imply
   approval, and approval never bypasses a missing grant: an already-approved step is
   re-checked against the run's current grants.
+  - A step that an interrupted drive left `running` is re-checked too. If its grant is gone, the
+    engine raises `RunningStepNotPermitted` and writes nothing for the step. It does not skip it,
+    because the earlier attempt may already have run. The standalone service answers 409.
+  - Whether a still-permitted `running` step may be re-entered stays the store's decision, at
+    the `running` transition.
 - **Risk tiers × policies.** The table lives in `policies.py` and is written out as finite
   tests in `tests/test_policy_matrix.py`.
   - `manual` and `review_checkpoints` currently share one predicate.

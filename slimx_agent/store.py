@@ -130,7 +130,9 @@ class RunStore[RunT: RunView, StepT: StepView, ContextT](Protocol):
         finds a step already ``running`` (an earlier drive was interrupted) requests
         ``running`` again before re-entering the handler; a host whose earlier attempt may
         already have crossed its entry boundary MUST refuse (raise) instead of allowing a
-        second entry. The engine itself never retries."""
+        second entry. The engine itself never retries. The engine asks for this transition only
+        after its own permission gate passed: a ``running`` step whose grant is gone is refused
+        with ``engine.RunningStepNotPermitted`` before any store write."""
         ...
 
     def rollback(self) -> None:
